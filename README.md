@@ -131,7 +131,7 @@ HEX_CLIENT_DLL=/path/to/Assembly-CSharp-firstpass.dll
 HEX_ORIGINAL_AI=1
 `
 
-The integration repository now includes the seven user-supplied HEX client runtime DLLs under `.github/workflows/` so the CI runner can perform a real client-runtime load check. The worker does not require them at compile time; at runtime it resolves sibling managed DLLs from the same directory as `Assembly-CSharp-firstpass.dll`.
+The seven user-supplied HEX client runtime DLLs are staged by CI into the same layout used by Dingler: the three compile-time references go under `upstream/Dingler-FrostRingArena/DLLs/`, and all seven runtime DLLs go under `upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/`. The worker does not require them at compile time; at runtime it resolves sibling managed DLLs from the same directory as `Assembly-CSharp-firstpass.dll`.
 
 ## 6. Arena AI hosting
 
@@ -246,8 +246,9 @@ In the current development sandbox:
 Python integration tests: 9/9 PASS
 Python syntax checks: PASS
 C# build: delegated to GitHub Actions
-Original client runtime health: exercised by the Windows CI pipeline against the uploaded DLL set
+Original client runtime health: exercised by the Windows CI pipeline from the Dingler runtime layout
 Original AI session construction probe: included in the Windows CI pipeline
+Dingler reference build: included in the Windows CI pipeline
 `
 
 A full Original-AI end-to-end battle still requires a valid game/session event stream and matching client-derived `Records/*.jsonl` data. The uploaded DLLs remove the previous binary-availability blocker; they do not manufacture missing game-state records.
