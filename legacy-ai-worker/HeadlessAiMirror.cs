@@ -51,6 +51,28 @@ public sealed class HeadlessAiMirror : IDisposable
         int aiPosition,
         string sessionName)
     {
+        string stage = "start";
+        try
+        {
+            return CreateCore(
+                assembly, sessionUid64, aiUid64, humanUid64,
+                aiPosition, sessionName);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Headless AI mirror construction failed at '{stage}': {ex.Message}", ex);
+        }
+    }
+
+    private static HeadlessAiMirror CreateCore(
+        Assembly assembly,
+        ulong sessionUid64,
+        ulong aiUid64,
+        ulong humanUid64,
+        int aiPosition,
+        string sessionName)
+    {
         static Type Required(Assembly asm, string fullName) =>
             asm.GetType(fullName, true, false)
             ?? throw new InvalidOperationException($"Missing client type: {fullName}");
