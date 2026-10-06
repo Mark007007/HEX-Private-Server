@@ -69,6 +69,8 @@ Both upstream projects are AGPL-3.0. Keep the upstream license notices and Dingl
 
 The integration is implemented as a **reviewed overlay on top of the pinned hex-server submodule**. Dingler's server engine is not copied into the authoritative runtime.
 
+The public upstream submodule does not include the client-derived `Records/*.jsonl` snapshot, so the authoritative-server startup smoke and the full client-data regression suite are conditionally skipped until those records are supplied.
+
 | Stage | Status | Implementation |
 |---|---|---|
 | 1. Deck Import | Done | Dingler-compatible v1 decoder, validation, ownership-aware instance allocation |
@@ -80,7 +82,7 @@ The integration is implemented as a **reviewed overlay on top of the pinned hex-
 | 7. RulesPort transaction conversion | Done | Worker intents become typed `RulesTransaction` objects |
 | 8. Python fallback | Done | Original AI failure falls through to existing Python AI |
 | 9. Arena regression layer | Done | Existing hex-server Arena remains authoritative; focused integration tests cover the integration contracts |
-| 10. Build/start/battle validation | CI pipeline ready | GitHub Actions builds the worker, validates all seven client DLLs on Windows, loads the original runtime, constructs an AI session mirror, and runs the server tests available without client-derived Records |
+| 10. Build/start/battle validation | CI pipeline ready | GitHub Actions builds the worker and Dingler reference, validates all seven client DLLs on Windows, loads the original runtime, constructs an AI session mirror, runs Python/server regressions, and starts the authoritative HConnect server when the required client-derived Records are available |
 
 ## 1. Deck Import
 
