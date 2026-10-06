@@ -280,6 +280,37 @@ jobs:
               ForEach-Object { "property $($_.Name):$($_.PropertyType.FullName) writable=$($_.CanWrite)" }
           }
 
+      - name: Probe client CardInstanceBits hydration
+        shell: pwsh
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/Assembly-CSharp-firstpass.dll
+        run: |
+          $asm = [System.Reflection.Assembly]::LoadFrom($env:HEX_CLIENT_DLL)
+          $bitsType = $asm.GetType("Game.Shared.Domain.card_instance_bits", $true, $false)
+          $cardType = $asm.GetType("Game.Shared.Mechanics.Card", $true, $false)
+          $bits = [Activator]::CreateInstance($bitsType)
+          foreach ($name in @("InstanceId","CardInstanceId","CardTemplateId","TemplateGuid","TemplateId","CardId","Id","Guid")) {
+            $p = $bitsType.GetProperty($name, [System.Reflection.BindingFlags] "Instance,Public,NonPublic")
+            if ($p -and $p.CanWrite) { Write-Host "bits property $name : $($p.PropertyType.FullName)"; continue }
+            $f = $bitsType.GetField($name, [System.Reflection.BindingFlags] "Instance,Public,NonPublic")
+            if ($f) { Write-Host "bits field $name : $($f.FieldType.FullName)" }
+          }
+          $ctor = $cardType.GetConstructor(
+            [System.Reflection.BindingFlags] "Instance,Public,NonPublic",
+            $null,
+            @($bitsType),
+            $null)
+          if (-not $ctor) { throw "Card(card_instance_bits) constructor not found" }
+          $card = $ctor.Invoke(@($bits))
+          Write-Host "CARD CREATED type=$($card.GetType().FullName)"
+          foreach ($name in @("m_SessionCardId","m_CardTemplate","m_CardInstanceData","m_CurrentCardCollection","m_CardState","m_Session")) {
+            $f = $cardType.GetField($name, [System.Reflection.BindingFlags] "Instance,Public,NonPublic")
+            if ($f) {
+              $v = $f.GetValue($card)
+              Write-Host "card $name = $([string]$v)"
+            }
+          }
+
       - name: Worker protocol smoke test
         shell: bash
         run: |
