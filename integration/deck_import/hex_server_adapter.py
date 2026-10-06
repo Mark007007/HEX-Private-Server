@@ -10,26 +10,19 @@ def _db_connection():
     return hconnect_server._db
 
 def _ensure_instance_rows(user_id: int, template_guid: str, conn) -> Sequence[int]:
-    row = conn.execute("SELECT quantity FROM collections WHERE user_id=? AND card_template_id=?",
-                        (int(user_id), template_guid)).fetchone()
-    wanted = max(0, int(row[0] if row else 0))
+    """Return only already-owned card instances for this template.
+
+    The importer must never manufacture instances as a side effect of a deck
+    import.  Collection quantity and instance rows are distinct persistence
+    concepts; if an installation has fewer instance rows than collection
+    quantity, the import fails cleanly rather than silently creating cards.
+    """
     rows = conn.execute(
-        "SELECT instance_id FROM card_instances WHERE user_id=? AND template_guid=? ORDER BY instance_id",
-        (int(user_id), template_guid)).fetchall()
-    ids = [int(r[0]) for r in rows]
-    if len(ids) >= wanted:
-        return ids
-    from profile_db import db_insert_card_instance, db_next_card_instance_for_user
-    next_id = int(db_next_card_instance_for_user(int(user_id), conn=conn))
-    while len(ids) < wanted:
-        while conn.execute(
-            "SELECT 1 FROM card_instances WHERE user_id=? AND instance_id=?",
-            (int(user_id), next_id)).fetchone():
-            next_id += 1
-        db_insert_card_instance(int(user_id), next_id, template_guid, conn=conn)
-        ids.append(next_id)
-        next_id += 1
-    return ids
+        "SELECT instance_id FROM card_instances "
+        "WHERE user_id=? AND template_guid=? ORDER BY instance_id",
+        (int(user_id), template_guid),
+    ).fetchall()
+    return [int(row[0]) for row in rows]
 
 class HexServerDeckStorage(DeckStorage):
     def __init__(self, conn=None) -> None:
