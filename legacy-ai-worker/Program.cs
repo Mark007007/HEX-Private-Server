@@ -101,8 +101,10 @@ internal static class Program
         var humanUid64 = ULong(payload, "human_player_uid64", "opponent_uid64");
         var aiPosition = Int(payload, "ai_position", 1);
         var sessionName = String(payload, "session_name", "HEX AI Probe");
+        var sessionFlags = ULong(payload, "session_flags");
         return _runtime.Probe(
-            sessionUid64, aiUid64, humanUid64, aiPosition, sessionName);
+            sessionUid64, aiUid64, humanUid64, aiPosition, sessionName,
+            sessionFlags);
     }
 
     private static object Decide(JsonElement payload)
@@ -116,6 +118,7 @@ internal static class Program
         var humanUid64 = ULong(payload, "human_player_uid64", "opponent_uid64");
         var aiPosition = Int(payload, "ai_position", 1);
         var sessionName = String(payload, "session_name", "HEX AI Session");
+        var sessionFlags = ULong(payload, "session_flags");
         var events = new List<EventEnvelope>();
 
         if (payload.TryGetProperty("events", out var eventArray) &&
@@ -132,7 +135,7 @@ internal static class Program
 
         return _runtime.Decide(
             sessionUid64, aiUid64, humanUid64,
-            aiPosition, sessionName, events);
+            aiPosition, sessionName, sessionFlags, events);
     }
 
     private static ulong ULong(JsonElement obj, params string[] names)
