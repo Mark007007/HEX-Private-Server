@@ -208,6 +208,29 @@ jobs:
           "assembly_location=$($asm.Location)"
           "assembly_full_name=$($asm.FullName)"
 
+      - name: Inspect session timer members
+        shell: pwsh
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/Assembly-CSharp-firstpass.dll
+        run: |
+          $asm = [System.Reflection.Assembly]::LoadFrom($env:HEX_CLIENT_DLL)
+          foreach ($typeName in @("Game.Shared.SessionState","Game.Shared.Session")) {
+            $type = $asm.GetType($typeName, $true, $false)
+            if ($null -eq $type) {
+              Write-Host "missing type: $typeName"
+              continue
+            }
+            Write-Host "TYPE $typeName"
+            $type.GetProperties([System.Reflection.BindingFlags] "Instance,Public,NonPublic") |
+              Where-Object { $_.Name -match '(?i)chess|timer|time|session' } |
+              Sort-Object Name |
+              ForEach-Object { "property $($_.Name) : $($_.PropertyType.FullName) writable=$($_.CanWrite)" }
+            $type.GetFields([System.Reflection.BindingFlags] "Instance,Public,NonPublic") |
+              Where-Object { $_.Name -match '(?i)chess|timer|time|session' } |
+              Sort-Object Name |
+              ForEach-Object { "field $($_.Name) : $($_.FieldType.FullName)" }
+          }
+
       - name: Worker protocol smoke test
         shell: bash
         run: |
