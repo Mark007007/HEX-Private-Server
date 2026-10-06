@@ -21,14 +21,11 @@ def uv(value):
 
 
 def make_code():
-    # format=1, champion=1
-    # main: site 2 x2 with gem site 4
-    # reserve: site 3 x1
     body = bytearray()
     body += uv(1) + uv(1)
-    body += uv(1) + uv(2) + uv(2 * 2 + 1) + uv(1) + uv(4)
-    body += uv(1) + uv(3) + uv(1 * 2)
-    body += uv(1) + uv(5) + b"Test"
+    body += uv(1) + uv(2) + uv(5) + uv(1) + uv(4)
+    body += uv(1) + uv(3) + uv(2)
+    body += uv(1) + uv(4) + b"Test"
     checksum = (binascii.crc32(body) & 0xFFFFFFFF).to_bytes(4, "big")
     return "v1" + base64.urlsafe_b64encode(body + checksum).decode().rstrip("=")
 
@@ -56,7 +53,7 @@ class DeckImportTests(unittest.TestCase):
             root = Path(tmp)
             (root / "ids.json").write_text(json.dumps({
                 "entries": [
-                    [1, "champion", "champion", "Champion"],
+                    [1, "champion-guid", "champion", "Champion"],
                     [2, "card-main", "card", "Main"],
                     [3, "card-reserve", "card", "Reserve"],
                     [4, "gem-guid", "gem", "Gem"],
@@ -79,16 +76,23 @@ class DeckImportTests(unittest.TestCase):
             self.assertEqual(importer.save(9, deck), 77)
             self.assertEqual(json.loads(storage.saved[2]["cards_json"]), [101, 102])
             self.assertEqual(json.loads(storage.saved[2]["reserve_cards_json"]), [201])
-            self.assertEqual(json.loads(storage.saved[2]["active_gems_json"]), {"101": [5], "102": [5]})
+            self.assertEqual(
+                json.loads(storage.saved[2]["active_gems_json"]),
+                {"101": [5], "102": [5]},
+            )
 
     def test_missing_gem_resolver_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "ids.json").write_text(json.dumps({
-                "entries": [[1, "champion", "champion"], [2, "card-main", "card"], [4, "gem", "gem"]]
+                "entries": [
+                    [1, "champion-guid", "champion"],
+                    [2, "card-main", "card"],
+                    [4, "gem-guid", "gem"],
+                ]
             }), encoding="utf-8")
             (root / "gems.json").write_text(json.dumps({
-                "x": [{"id": "gem", "type": "Blood_Minor_1"}]
+                "x": [{"id": "gem-guid", "type": "Blood_Minor_1"}]
             }), encoding="utf-8")
             importer = DeckImporter(SiteIds(root), FakeStorage())
             with self.assertRaises(DeckImportError):
