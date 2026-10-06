@@ -69,7 +69,7 @@ Both upstream projects are AGPL-3.0. Keep the upstream license notices and Dingl
 
 The integration is implemented as a **reviewed overlay on top of the pinned hex-server submodule**. Dingler's server engine is not copied into the authoritative runtime.
 
-The public upstream submodule does not include the client-derived `Records/*.jsonl` snapshot, so the authoritative-server startup smoke and the full client-data regression suite are conditionally skipped until those records are supplied.
+The public upstream submodule does not include the client-derived `Records/*.jsonl` snapshot. The authoritative server's data projection expects a complete 15-section Records snapshot; CI therefore skips the Records-dependent startup/regression gates until that source data is supplied.
 
 | Stage | Status | Implementation |
 |---|---|---|
@@ -259,6 +259,37 @@ dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
 
 Run the server using `hex-server/HOWTO.md`.
 
+### Supplying client-derived Records
+
+The public project intentionally keeps the original client DLLs separate from the server's client-derived Records dataset. Use the `Data/gamedata` file from your own HEX installation to generate the local Records snapshot:
+
+```bash
+HEX_GAMEDATA="/path/to/HEX SHARDS OF FATE/Data/gamedata" \
+  bash scripts/prepare_client_records.sh
+```
+
+The helper runs the pinned upstream `AssetExtraction/extract_records.py` extractor and validates all 15 sections required by `gamedata_seed.py`:
+
+```text
+AbilityEffectConditionTemplate.jsonl
+AbilityEffectTemplate.jsonl
+AbilityTargetTemplate.jsonl
+AbilityTemplate.jsonl
+CardCounterTemplate.jsonl
+CardTemplate.jsonl
+ChampionClassData.jsonl
+ChampionTalentData.jsonl
+ChampionTemplate.jsonl
+ConversationTemplate.jsonl
+DeckTemplate.jsonl
+EncounterDeck.jsonl
+InventoryItemData.jsonl
+QuestTemplate.jsonl
+SceneData.jsonl
+```
+
+The generated files stay in the `hex-server/Records/` submodule working tree. Do not publish or commit proprietary client-derived data unless you have the rights to redistribute it.
+
 ### GitHub Actions
 
 `.github/workflows/ci.yml` now:
@@ -268,7 +299,7 @@ Run the server using `hex-server/HOWTO.md`.
 3. applies the integration overlay;
 4. runs all integration tests;
 5. runs Python syntax checks;
-6. runs server regression tests when client-derived Records are present;
+6. verifies the complete 15-file client-derived Records set and runs the server startup/regression gates when it is present;
 7. builds the C# Original-AI worker on `windows-latest`;
 8. verifies all seven uploaded client DLLs are non-empty;
 9. performs the generic worker JSONL health smoke test;
@@ -279,13 +310,14 @@ Run the server using `hex-server/HOWTO.md`.
 In the current development sandbox:
 
 `text
-Python integration tests: 9/9 PASS
+Python integration tests: PASS (including growing live-event history regression)
 Python syntax checks: PASS
 C# build: delegated to GitHub Actions
 Original client runtime health: exercised by the Windows CI pipeline from the Dingler runtime layout
 Original AI session construction probe: included in the Windows CI pipeline
 Dingler reference build: included in the Windows CI pipeline
 Client DLL source layout: `client-runtime/` → Dingler `DLLs/` + `Dingler.Terminal/bin/Release/net10.0/`
+CI baseline: Run #82 PASS across integration, Dingler reference, and Original AI worker gates
 `
 
 A full Original-AI end-to-end battle still requires a valid game/session event stream and matching client-derived `Records/*.jsonl` data. The uploaded DLLs remove the previous binary-availability blocker; they do not manufacture missing game-state records.
