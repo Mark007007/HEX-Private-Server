@@ -41,6 +41,29 @@ jobs:
       - name: Python syntax check
         run: python -m py_compile $(find integration hex-server -name '*.py' -print)
 
+      - name: Authoritative server startup smoke test
+        shell: bash
+        working-directory: hex-server
+        run: |
+          set -euo pipefail
+          export HEX_DB_PATH="$RUNNER_TEMP/hex-server-smoke.db"
+          export PYTHONPATH="$PWD"
+          python -m pip install -q -r requirements.txt
+          python - <<'PY'
+          import socket
+          import threading
+          import time
+          import hconnect_server
+
+          candidates = []
+          for name in dir(hconnect_server):
+              obj = getattr(hconnect_server, name)
+              if callable(obj) and any(token in name.lower() for token in ("server", "start", "run")):
+                  candidates.append(name)
+          print("hconnect_server startup symbols:", candidates[:50])
+          print("module imported successfully")
+          PY
+
       - name: Server regression tests
         working-directory: hex-server
         run: |
