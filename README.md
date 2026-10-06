@@ -2,36 +2,87 @@
 
 一个把 HEX 私服服务器、原客户端 AI、Deck Import 和 Frost Ring Arena 兼容逻辑整合起来的项目。
 
-> 核心原则：hex-server 是唯一的规则与游戏状态权威。Dingler 只作为参考/集成来源，不运行第二套服务器规则。
+> **目标：尽量做到拿下来就能跑。**
+>
+> Windows 用户优先：**双击 `start.bat`**。
+> 
+> Git Bash / Linux / macOS：执行 **`bash start.sh`**。
 
-## 🚀 最简单的安装与测试
+核心原则：**`hex-server/` 是唯一的规则与游戏状态权威。Dingler 只作为参考/集成来源，不运行第二套服务器规则。**
 
-Windows 用户推荐直接使用 Git Bash。
+---
 
-需要：
+## 🚀 一键安装 / 自检 / 启动
 
-- Git
-- Python 3
-- .NET 10 SDK
+### Windows
 
-### 1. 下载
+安装好 Git for Windows、Python 3 和 .NET 10 SDK 后：
 
-    git clone --recurse-submodules https://github.com/Mark007007/HEX-Private-Server.git
-    cd HEX-Private-Server
+**直接双击：**
 
-### 2. 初始化
+```text
+start.bat
+```
 
-    bash scripts/pull_upstreams.sh
-    bash scripts/apply_integration.sh
+脚本会自动：
 
-### 3. 测试
+```text
+同步固定版本的 upstream
+        ↓
+应用 integration overlay
+        ↓
+创建 Python 虚拟环境
+        ↓
+安装服务器依赖
+        ↓
+运行全部 integration tests
+        ↓
+构建 Original-AI Worker
+        ↓
+加载客户端 AI DLL
+        ↓
+执行 AI health + session probe
+        ↓
+检测 Records
+        ↓
+有 Records → 自动启动服务器
+没有 Records → 明确提示缺少 Data/gamedata
+```
 
-    python -m unittest discover -s tests -v
-    dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
+### Git Bash / Linux / macOS
 
-看到测试通过、C# 构建成功，就说明项目的基础安装已经正确。
+```bash
+bash start.sh
+```
 
-> 注意：这一步不需要先准备 Records。Records 只在真正启动完整 HEX 游戏服务器、进行真实对局时才需要。
+不需要手工执行一串测试命令。
+
+---
+
+## 🎮 真正开服只剩一个外部数据依赖
+
+项目可以自己完成安装、构建和 AI 自检。
+
+真正运行 HEX 对局时，服务器还需要**你自己的 HEX 客户端安装里的**：
+
+```text
+Data/gamedata
+```
+
+因此完整开服命令只多一个参数：
+
+```bash
+HEX_GAMEDATA="/你的HEX安装目录/Data/gamedata" bash start.sh
+```
+
+脚本会自动：
+
+1. 提取 Records；
+2. 添加服务器需要的 Records v1 header；
+3. 检查 15 个 Records section；
+4. 通过后自动启动 `hex-server`。
+
+也就是说，**不需要你先手工跑 Records 提取、测试、build、restart。**
 
 ## 🤖 测试原版 AI
 
