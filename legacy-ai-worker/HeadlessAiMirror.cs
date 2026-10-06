@@ -403,6 +403,131 @@ public sealed class HeadlessAiMirror : IDisposable
         return result;
     }
 
+    private static List<string> Disassemble(MethodInfo method)
+    {
+        var body = method.GetMethodBody();
+        if (body is null)
+            return new() { "no method body" };
+
+        var il = body.GetILAsByteArray();
+        if (il is null)
+            return new() { "no IL" };
+
+        var one = new OpCode[0x100];
+        var two = new OpCode[0x100];
+        foreach (var field in typeof(OpCodes).GetFields(
+            BindingFlags.Public | BindingFlags.Static))
+        {
+            if (field.GetValue(null) is not OpCode op)
+                continue;
+            var value = unchecked((ushort)op.Value);
+            if (op.Size == 1)
+                one[value] = op;
+            else if ((value & 0xff00) == 0xfe00)
+                two[value & 0xff] = op;
+        }
+
+        var output = new List<string>();
+        var pos = 0;
+        while (pos < il.Length)
+        {
+            var offset = pos;
+            OpCode op;
+            var b = il[pos++];
+            if (b == 0xfe)
+                op = two[il[pos++]];
+            else
+                op = one[b];
+
+            object? operand = null;
+            switch (op.OperandType)
+            {
+                case OperandType.InlineNone:
+                    break;
+                case OperandType.ShortInlineI:
+                    operand = (sbyte)il[pos++];
+                    break;
+                case OperandType.InlineI:
+                    operand = BitConverter.ToInt32(il, pos);
+                    pos += 4;
+                    break;
+                case OperandType.InlineI8:
+                    operand = BitConverter.ToInt64(il, pos);
+                    pos += 8;
+                    break;
+                case OperandType.ShortInlineR:
+                    operand = BitConverter.ToSingle(il, pos);
+                    pos += 4;
+                    break;
+                case OperandType.InlineR:
+                    operand = BitConverter.ToDouble(il, pos);
+                    pos += 8;
+                    break;
+                case OperandType.ShortInlineBrTarget:
+                {
+                    var delta = (sbyte)il[pos++];
+                    operand = pos + delta;
+                    break;
+                }
+                case OperandType.InlineBrTarget:
+                {
+                    var delta = BitConverter.ToInt32(il, pos);
+                    pos += 4;
+                    operand = pos + delta;
+                    break;
+                }
+                case OperandType.ShortInlineVar:
+                    operand = il[pos++];
+                    break;
+                case OperandType.InlineVar:
+                    operand = BitConverter.ToUInt16(il, pos);
+                    pos += 2;
+                    break;
+                case OperandType.InlineString:
+                {
+                    var token = BitConverter.ToInt32(il, pos);
+                    pos += 4;
+                    try { operand = $"string:{method.Module.ResolveString(token)}"; }
+                    catch { operand = $"token:0x{token:X8}"; }
+                    break;
+                }
+                case OperandType.InlineField:
+                case OperandType.InlineMethod:
+                case OperandType.InlineType:
+                case OperandType.InlineTok:
+                case OperandType.InlineSig:
+                {
+                    var token = BitConverter.ToInt32(il, pos);
+                    pos += 4;
+                    try { operand = method.Module.ResolveMember(token)?.ToString() ?? $"token:0x{token:X8}"; }
+                    catch { operand = $"token:0x{token:X8}"; }
+                    break;
+                }
+                case OperandType.InlineSwitch:
+                {
+                    var count = BitConverter.ToInt32(il, pos);
+                    pos += 4;
+                    var targets = new int[count];
+                    for (var i = 0; i < count; i++)
+                    {
+                        targets[i] = BitConverter.ToInt32(il, pos);
+                        pos += 4;
+                    }
+                    for (var i = 0; i < count; i++)
+                        targets[i] = pos + targets[i];
+                    operand = string.Join(",", targets);
+                    break;
+                }
+            }
+
+            output.Add(operand is null
+                ? $"{offset:X4}: {op.Name}"
+                : $"{offset:X4}: {op.Name} {operand}");
+        }
+
+        return output;
+    }
+
     private static List<object> DescribeDictionary(System.Collections.IDictionary dict)
     {
         var result = new List<object>();
@@ -481,6 +606,13 @@ public sealed class HeadlessAiMirror : IDisposable
                 continue;
             try { result[name] = p.GetValue(session)?.ToString(); }
             catch (Exception ex) { result[name] = "THREW: " + ex.GetBaseException().Message; }
+
+            if (name == "ChessTimerLimit")
+            {
+                var getter = p.GetGetMethod(true);
+                if (getter is not null)
+                    result["ChessTimerLimit_getter_il"] = Disassemble(getter);
+            }
         }
 
         foreach (var name in new[] {
