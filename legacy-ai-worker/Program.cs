@@ -58,7 +58,9 @@ internal static class Program
                     ok = false,
                     action = "",
                     payload = new { },
-                    error = ex.GetBaseException().Message
+                    error = action == "probe"
+                        ? ex.ToString()
+                        : ex.GetBaseException().Message
                 }));
                 await Console.Out.FlushAsync();
             }
