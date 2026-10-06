@@ -73,10 +73,14 @@ public sealed class HeadlessAiMirror : IDisposable
         int aiPosition,
         string sessionName)
     {
-        static Type Required(Assembly asm, string fullName) =>
-            asm.GetType(fullName, true, false)
-            ?? throw new InvalidOperationException($"Missing client type: {fullName}");
+        string stage = "type lookup";
+        try
+        {
+            static Type Required(Assembly asm, string fullName) =>
+                asm.GetType(fullName, true, false)
+                ?? throw new InvalidOperationException($"Missing client type: {fullName}");
 
+        stage = "type lookup";
         var uidType = Required(assembly, "Game.Shared.UID");
         var sessionStateType = Required(assembly, "Game.Shared.SessionState");
         var sessionEventType = Required(assembly, "Game.Shared.SessionEventArgs");
@@ -117,6 +121,7 @@ public sealed class HeadlessAiMirror : IDisposable
             binder: null, types: new[] { personalityType }, modifiers: null)
             ?? throw new InvalidOperationException("AIPlayer.InitializeAITactical is unavailable");
 
+        stage = "construct SessionState";
         var state = Activator.CreateInstance(sessionStateType)
             ?? throw new InvalidOperationException("Cannot create SessionState");
         SetMember(state, "SessionId", MakeUid(uidType, sessionUid64));
@@ -124,21 +129,27 @@ public sealed class HeadlessAiMirror : IDisposable
         SetMember(state, "MinimumPlayerCount", 2);
         SetMember(state, "MaximumPlayerCount", 2);
 
+        stage = "construct AI PlayerState";
         var aiState = Activator.CreateInstance(playerStateType)
             ?? throw new InvalidOperationException("Cannot create AI PlayerState");
         SetMember(aiState, "PlayerId", MakeUid(uidType, aiUid64));
         SetMember(aiState, "PlayerPosition", aiPosition);
 
+        stage = "construct human PlayerState";
         var humanState = Activator.CreateInstance(playerStateType)
             ?? throw new InvalidOperationException("Cannot create human PlayerState");
         SetMember(humanState, "PlayerId", MakeUid(uidType, humanUid64));
         SetMember(humanState, "PlayerPosition", aiPosition == 0 ? 1 : 0);
 
+        stage = "construct AIPlayer";
         var ai = CreateSingle(aiPlayerType, aiState);
+        stage = "construct RemotePlayer";
         var remote = CreateDouble(
             remotePlayerType, humanState, InvalidUid(uidType));
 
+        stage = "create capture sink";
         var sink = new CaptureSink();
+        stage = "build ClientSessionBase mirror type";
         var mirrorType = BuildMirrorType(
             clientSessionBaseType, sessionStateType, transactionType,
             sessionEventType, playerType);
@@ -147,15 +158,27 @@ public sealed class HeadlessAiMirror : IDisposable
             new[] { sessionStateType, typeof(CaptureSink) })
             ?? throw new InvalidOperationException("generated mirror constructor missing");
 
+        stage = "construct ClientSessionBase mirror";
         var mirror = ctor.Invoke(new object[] { state, sink });
+        stage = "add AI player to mirror";
         addPlayer.Invoke(mirror, new[] { ai });
+        stage = "add remote player to mirror";
         addPlayer.Invoke(mirror, new[] { remote });
 
+        stage = "construct AIPersonality";
         var personality = CreateDefault(personalityType);
+        stage = "InitializeAITactical";
         initializeAi.Invoke(ai, new[] { personality });
 
+        stage = "create HeadlessAiMirror wrapper";
         return new HeadlessAiMirror(
             assembly, sessionEventType, buildArgs, routeMessage, mirror, sink);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Headless AI mirror construction failed at '{stage}': {ex.Message}", ex);
+        }
     }
 
     public IReadOnlyList<object> Transactions => _sink.Transactions;
