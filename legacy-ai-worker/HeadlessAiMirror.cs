@@ -454,6 +454,19 @@ public static class TransactionProjector
         return name switch
         {
             "PassPriorityTransaction" => Decision("pass", new()),
+            "ChoosePlayFirstTransaction" => Decision("choose_play_first", new()),
+            "ChooseDrawFirstTransaction" => Decision("choose_draw_first", new()),
+            "AcceptStartingHandTransaction" => Decision("accept_starting_hand", new()),
+            "MulliganTransaction" => Decision("mulligan", new()),
+            "RequestPrioritySyncTransaction" => Decision("request_priority_sync", new()),
+            "CancelAutoPassTransaction" => Decision("cancel_auto_pass", new()),
+            "SetAutoPassTransaction" => Decision("set_auto_pass", new()
+            {
+                ["as_active"] = BoolValue(transaction, false, "m_AsActive", "AsActive"),
+                ["passing_state"] = IntValue(transaction, "m_PassingState", "PassingState")
+            }),
+            "PlayChampionTransaction" => Decision("play_champion",
+                new() { ["card_id"] = UidRequired(transaction, "m_SessionCardId", "SessionCardId") }),
             "PlayResourceTransaction" => Decision("play_resource",
                 new() { ["card_id"] = UidRequired(transaction, "m_SessionCardId", "SessionCardId") }),
             "PlayTroopTransaction" => CardDecision("play_troop", transaction),
@@ -461,7 +474,22 @@ public static class TransactionProjector
             "PlaySpellTransaction" => CardDecision("play_spell", transaction),
             "DiscardTransaction" => Decision("discard",
                 new() { ["card_id"] = UidRequired(transaction, "m_SessionCardId", "SessionCardId") }),
-            "ActivateAbilityTransaction" => Decision("activate_ability", new()
+            "ActivateTriggeredAbiliesTransaction" or "ActivateTriggeredAbilitiesTransaction" =>
+                Decision("activate_triggered_abilities", new()
+                {
+                    ["activation_data"] = FindStructured(
+                        transaction, "m_AbilityActivationData",
+                        "AbilityActivationData") ?? Array.Empty<object>()
+                }),
+            "SetAbilityActivationDataTransaction" => Decision("set_ability_activation_data", new()
+                {
+                    ["ability_instance_id"] = IntValue(
+                        transaction, "AbilityInstanceId", "m_AbilityInstanceId"),
+                    ["activation_data"] = FindStructured(
+                        transaction, "m_AbilityActivationData",
+                        "AbilityActivationData") ?? new Dictionary<string, object?>()
+                }),
+                        "ActivateAbilityTransaction" => Decision("activate_ability", new()
             {
                 ["source_card_id"] = UidRequired(transaction, "SourceCardId", "m_SourceCardId",
                     "m_SessionCardId", "SessionCardId"),
