@@ -312,6 +312,18 @@ while final.casefold() in existing:
 
 映射不到时**只记 warning，不作废整个导入**。
 
+两条路径的**入参不同**，但出口一致（都是 `gem_templates.gem_type`）：
+
+- **链接路径**：站点 id → `ids.json` 的 GUID → `gems.json` 的 `type` 名 →
+  按 `gem_type_name` 精确匹配 `gem_templates`。
+  站点的 `type` 字符串与 `gem_templates.gem_type_name` **完全同名**
+  （例：site `3494` → `Blood_Major_1` → `gem_type = 7`）。
+- **文本路径**：直接按**显示名**匹配 `gem_templates.name`
+  （例：`Minor Wild Orb of Conservation` → `gem_type = 1`）。
+
+所以同一种宝石经两条路径得到**同一个 `gem_type`**；实测中两条路径数值不同只是因为
+测试取了不同的宝石（链接用 Major Blood Orb，文本用 Minor Wild Orb），不是映射分歧。
+
 ---
 
 ## 6. 服务端契约

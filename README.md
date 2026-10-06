@@ -111,7 +111,11 @@ stop-game.bat --all     # 额外关掉游戏客户端
 ### 本机路径配置：`local-env.sh`
 
 `start-game.sh` 会 source 仓库根目录下的 `local-env.sh`（未跟踪），
-所有机器相关的路径都放这里，脚本本身不含任何硬编码路径：
+所有机器相关的路径都放这里，脚本本身不含任何硬编码路径。
+
+> **这个文件必须手工创建**（仓库里没有、也不该有）。少了它 `HEX_CLIENT_DIR`
+> 为空，`start-game.sh` 会直接报错退出；`HEX_CODEX_DATA` 未设时分享链接导入
+> 会失败（牌表文本导入不受影响）。
 
 ```sh
 HEX_CLIENT_DIR="/d/game/HEX SHARDS OF FATE"     # 游戏安装目录（POSIX 形式）
@@ -288,27 +292,57 @@ python scripts/build_codex_ids.py --cards-html <卡组构建页URL或本地保�
 /importdecktext Champion: Ozawa ; 4x Chill ; Reserves: ; 2x Extinction
 ```
 
-## 🧪 推荐流程
+## 🧪 全新 clone 流程（已在干净 clone 中实测）
 
-    ① clone
-       ↓
-    ② pull_upstreams.sh
-       ↓
-    ③ apply_integration.sh
-       ↓
-    ④ Python tests
-       ↓
-    ⑤ C# build
-       ↓
-    ⑥ AI health / probe
-       ↓
-    ⑦ 准备自己的 Records
-       ↓
-    ⑧ 启动 hex-server
-       ↓
-    ⑨ 测试真实对局
+```bash
+# 1. 拉取（含 submodule，固定到 UPSTREAM.lock 的 commit）
+git clone --recurse-submodules https://github.com/Mark007007/HEX-Private-Server.git
+cd HEX-Private-Server
 
-前 6 步都不需要完整 Records 数据。
+# 2. 固定上游 + 应用 overlay（8 个整文件 + integration 包）
+bash scripts/pull_upstreams.sh
+bash scripts/apply_integration.sh
+
+# 3. 测试（28 项）
+python -m unittest discover -s tests
+
+# 4. 构建原版 AI Worker（需 .NET 10 SDK）
+dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
+
+# 5. 建库：从自己的客户端提取 Records（唯一的外部数据依赖）
+HEX_GAMEDATA="<客户端>/Data/gamedata" bash scripts/prepare_client_records.sh
+
+# 6. 创建 local-env.sh —— 未跟踪，必须手工创建（内容见上节）
+#    HEX_CLIENT_DIR / HEX_CODEX_DATA / HEX_DECK_USER / HEX_DECK_WATCH=1
+
+# 7. 开服（服务器 + 剪贴板助手 + 游戏）
+start-game.bat
+```
+
+Hex Codex 目录数据（`build/codex-data`）**已随仓库提交**，因此第 6 步之后即可直接导入
+分享链接，**不需要联网、不需要额外生成步骤**。
+
+### 已验证 / 未验证
+
+**已在干净 clone（含 submodule）中实测通过：**
+
+| 检查项 | 结果 |
+|---|---|
+| `apply_integration.sh` | 拷入 8 个 overlay 文件；`deck_inbox.py`、`integration/deck_import/text_deck.py` 从无到有 |
+| `hconnect_server.py` 打补丁前后 | `_process_deck_inbox` 出现（定义+调用）；魔石解析的 `& 0xFFFFFFFF` 掩码 **2 处 → 0 处** |
+| `python -m unittest discover -s tests` | 28 tests OK |
+| 牌表文本 → deck-inbox → 服务器消费 | 卡组入库；`active_gems` 含 bit 62；两槽位各解出一颗宝石 |
+| Hex Codex v1 分享链接 → 同一通道 | 同上（合成链接走真实 codec + CRC 校验） |
+| 出站 `EncodedDecks` 载荷 | 每卡发出的是**单颗**宝石枚举值，不是打包整数 |
+
+> 上游 `hconnect_server.py` **本身就带那个 32 位截断 bug**（2 处），所以「打补丁前」的
+> 对照是在干净 clone 上直接观察到的，不是推测。
+
+**仍需在游戏里手动确认**（无法脚本化）：
+
+- 收藏界面按 **Ctrl+V** 的真实热键路径（需要真人按键 + `Hex.exe` 为前台窗口）
+- 魔石在游戏内卡牌上的显示与对局中生效
+- Original AI 全链路（见文末「已知未自动化验证的部分」）
 
 ## 📁 项目结构
 
