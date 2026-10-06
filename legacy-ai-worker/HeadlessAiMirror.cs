@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
@@ -449,6 +450,36 @@ public sealed class OriginalAiRuntime
 
 public static class TransactionProjector
 {
+    private static ulong? Uid64(object? value)
+    {
+        if (value is null) return null;
+        if (value is ulong u) return u;
+        if (value is long l) return unchecked((ulong)l);
+        if (value is int i) return unchecked((ulong)i);
+
+        var type = value.GetType();
+        foreach (var name in new[] { "uid64", "m_UID64", "UID64", "value", "Value" })
+        {
+            var p = type.GetProperty(name,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (p is not null)
+            {
+                var nested = p.GetValue(value);
+                var result = Uid64(nested);
+                if (result.HasValue) return result;
+            }
+            var f = type.GetField(name,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (f is not null)
+            {
+                var nested = f.GetValue(value);
+                var result = Uid64(nested);
+                if (result.HasValue) return result;
+            }
+        }
+        return null;
+    }
+
     public static Dictionary<string, object?> Project(object transaction)
     {
         var name = transaction.GetType().Name;
