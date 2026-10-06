@@ -87,6 +87,28 @@ jobs:
             Write-Host "found: $dll ($size bytes)"
           }
 
+      - name: Inspect HEX client AI type surface
+        shell: pwsh
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/.github/workflows/Assembly-CSharp-firstpass.dll
+        run: |
+          $asm = [System.Reflection.Assembly]::LoadFrom($env:HEX_CLIENT_DLL)
+          try {
+            $types = $asm.GetTypes()
+          } catch [System.Reflection.ReflectionTypeLoadException] {
+            $types = $_.Exception.Types | Where-Object { $_ -ne $null }
+            Write-Warning "Some client types could not be loaded; listing all types that were resolved."
+          }
+          $matches = $types |
+            Where-Object { $_.FullName -match '(?i)(^|[.])AI|AITactical|Artificial|Player|Session|Transaction' } |
+            Sort-Object FullName
+          if (-not $matches) {
+            throw "No AI/Player/Session/Transaction types found in Assembly-CSharp-firstpass.dll"
+          }
+          $matches | ForEach-Object { $_.FullName }
+          "assembly_location=$($asm.Location)"
+          "assembly_full_name=$($asm.FullName)"
+
       - name: Worker protocol smoke test
         shell: bash
         run: |
