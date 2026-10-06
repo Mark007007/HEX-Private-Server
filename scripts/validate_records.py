@@ -45,17 +45,22 @@ def validate_records(root: str | Path) -> tuple[list[str], dict[str, int]]:
         count = 0
         try:
             with record_path.open("r", encoding="utf-8", errors="strict") as handle:
-                for lineno, line in enumerate(handle, 1):
-                    if not line.strip():
-                        continue
-                    try:
-                        json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        errors.append(
-                            f"{record_path.name}:{lineno}: invalid JSON: {exc.msg}"
-                        )
-                        continue
-                    count += 1
+                lines = handle.readlines()
+            if not lines or lines[0].rstrip("\n") != "# HEX-PRIVATE-SERVER Records v1":
+                errors.append(
+                    f"{record_path.name}: missing required first-line header {header!r}"
+                )
+            for lineno, line in enumerate(lines[1:], 2):
+                if not line.strip():
+                    continue
+                try:
+                    json.loads(line)
+                except json.JSONDecodeError as exc:
+                    errors.append(
+                        f"{record_path.name}:{lineno}: invalid JSON: {exc.msg}"
+                    )
+                    continue
+                count += 1
         except UnicodeError as exc:
             errors.append(f"{record_path.name}: invalid UTF-8: {exc}")
             continue

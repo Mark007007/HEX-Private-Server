@@ -37,4 +37,33 @@ echo "  $RECORDS_DIR"
     python3 AssetExtraction/extract_records.py
 )
 
+# The pinned server seed loader intentionally skips the first physical line
+# of each Records file. Add the format marker it expects after extraction so
+# the first real record is not silently discarded.
+for section in \
+  AbilityEffectConditionTemplate \
+  AbilityEffectTemplate \
+  AbilityTargetTemplate \
+  AbilityTemplate \
+  CardCounterTemplate \
+  CardTemplate \
+  ChampionClassData \
+  ChampionTalentData \
+  ChampionTemplate \
+  ConversationTemplate \
+  DeckTemplate \
+  EncounterDeck \
+  InventoryItemData \
+  QuestTemplate \
+  SceneData
+do
+  path="$RECORDS_DIR/$section.jsonl"
+  tmp="$path.tmp"
+  {
+    printf '%s\n' '# HEX-PRIVATE-SERVER Records v1'
+    cat "$path"
+  } > "$tmp"
+  mv "$tmp" "$path"
+done
+
 python3 "$ROOT/scripts/validate_records.py" "$RECORDS_DIR"

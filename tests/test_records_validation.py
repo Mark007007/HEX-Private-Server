@@ -12,9 +12,11 @@ class RecordsValidationTests(unittest.TestCase):
             if section == omit:
                 continue
             (root / f"{section}.jsonl").write_text(
-                json.dumps(
+                "# HEX-PRIVATE-SERVER Records v1\n"
+                + json.dumps(
                     '{"m_Guid":"00000000-0000-0000-0000-000000000000"}'
-                ) + "\n",
+                )
+                + "\n",
                 encoding="utf-8",
             )
 
@@ -40,11 +42,12 @@ class RecordsValidationTests(unittest.TestCase):
             root = Path(tmp)
             self._write_snapshot(root)
             (root / "CardTemplate.jsonl").write_text(
-                "{not valid json}\n", encoding="utf-8"
+                "# HEX-PRIVATE-SERVER Records v1\n{not valid json}\n",
+                encoding="utf-8",
             )
             errors, counts = validate_records(root)
             self.assertTrue(
-                any("CardTemplate.jsonl:1: invalid JSON" in x for x in errors)
+                any("CardTemplate.jsonl:2: invalid JSON" in x for x in errors)
             )
 
 

@@ -268,7 +268,7 @@ HEX_GAMEDATA="/path/to/HEX SHARDS OF FATE/Data/gamedata" \
   bash scripts/prepare_client_records.sh
 ```
 
-The helper runs the pinned upstream `AssetExtraction/extract_records.py` extractor and validates all 15 sections required by `gamedata_seed.py`:
+The helper runs the pinned upstream `AssetExtraction/extract_records.py`, adds the one-line Records v1 header expected by the pinned server seed loader, and validates all 15 sections required by `gamedata_seed.py`:
 
 ```text
 AbilityEffectConditionTemplate.jsonl

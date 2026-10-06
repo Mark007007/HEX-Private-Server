@@ -17,5 +17,7 @@ Completed integration layers:
 - Python AI fallback
 - focused integration tests and CI
 
-External runtime dependency:
+External runtime dependencies:
 the Dingler repository intentionally does not contain the HEX client Assembly-CSharp-firstpass.dll. Original Game.Shared.AI execution therefore requires the user's own game DLL and an adapter implementation; the server never fabricates an original-AI result when those are absent.
+
+The authoritative server also consumes a client-derived Records snapshot. The public upstream tree does not redistribute that dataset. Use `scripts/prepare_client_records.sh` with the user's own `Data/gamedata`; the helper extracts the required 15 sections and adds the format header expected by the pinned server seed loader.
