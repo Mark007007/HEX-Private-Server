@@ -1177,7 +1177,7 @@ def db_save_deck(user_id, deck_name, cards_json="[]", pve_champion_id=None,
                  pvp_champion_guid=None, active_gems_json="{}",
                  gem_abilities_json="{}", deck_sleeve_guid=None,
                  gameboard_guid=None, coin_guid=None, conn=None,
-                 reserve_cards_json="[]")
+                 reserve_cards_json="[]):
     connection = _profile_connection(conn)
     connection.execute(
         "INSERT INTO decks (user_id, deck_name, cards, reserves, pve_champion_id, "
