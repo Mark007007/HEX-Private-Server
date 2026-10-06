@@ -1,48 +1,273 @@
 # HEX Private Server
 
-Unified integration repository for IanUtley/hex-server and RomoSJR/Dingler-FrostRingArena.
+**HEX-Private-Server** is the integration project that combines:
 
-## Architecture
+- **IanUtley/hex-server** — the single authoritative server, persistence layer, RulesPort, PVP/PVE and game-state engine.
+- **RomoSJR/Dingler-FrostRingArena** — a pinned source/reference implementation whose original-client AI hosting, Hex Codex deck-link importer and Frost Ring Arena reliability fixes are selectively adapted.
 
-hex-server is the only authoritative gameplay/rules/persistence implementation. Dingler is pinned as a source/reference tree and its Arena/AI/Deck Import work is integrated selectively.
+The goal is a runnable private-server project, not a second competing rules engine.
 
-```text
+## Repository layout
+
+`text
 HEX-Private-Server
-├── hex-server/                         # pinned hex-server upstream
+├── hex-server/                         # pinned upstream, sole authoritative game server
 ├── upstream/Dingler-FrostRingArena/   # pinned Dingler arena branch
-├── integration/                        # runtime integration modules
-├── overlay/hex-server/                # reviewed changes applied to hex-server
-├── legacy-ai-worker/                  # real Game.Shared.AI runtime boundary
-├── tests/
-└── scripts/
-```
+├── integration/
+│   ├── deck_import/                    # Hex Codex v1 decoder + server persistence adapter
+│   └── ai_bridge/                      # Original AI JSONL bridge + RulesPort transaction adapter
+├── overlay/hex-server/                 # reviewed hex-server integration files
+├── legacy-ai-worker/                   # headless Game.Shared AI host
+├── tests/                              # integration/regression tests
+├── scripts/
+└── .github/workflows/ci.yml
+`
 
-## Pinned upstreams
+## Fixed upstream versions
 
-- IanUtley/hex-server @ c65f2cf7e78797fb6d9da9a3401345da7cead71d
-- RomoSJR/Dingler-FrostRingArena branch arena @ 8c06748080ab3fd15d67a6b2f7193615ffd2db02
+| Component | Repository | Ref |
+|---|---|---|
+| Authoritative server | IanUtley/hex-server | `main @ c65f2cf7e78797fb6d9da9a3401345da7cead71d` |
+| Arena / original AI reference | RomoSJR/Dingler-FrostRingArena | `arena @ 8c06748080ab3fd15d67a6b2f7193615ffd2db02` |
 
-Both upstreams are AGPL-3.0. Dingler's THIRD-PARTY-NOTICES.md must remain available when redistributing.
+Both upstream projects are AGPL-3.0. Keep the upstream license notices and Dingler's `THIRD-PARTY-NOTICES.md` when redistributing the combined source.
 
-## Build
+## Integration status
 
-```bash
+The integration is implemented as a **reviewed overlay on top of the pinned hex-server submodule**. Dingler's server engine is not copied into the authoritative runtime.
+
+| Stage | Status | Implementation |
+|---|---|---|
+| 1. Deck Import | Done | Dingler-compatible v1 decoder, validation, ownership-aware instance allocation |
+| 2. `/importdeck` | Done | Command wired before the developer-console gate |
+| 3. Reserve | Done | Dedicated `decks.reserves` storage + reserve wire flag |
+| 4. Codex Gem mapping | Done | `gems.json` type -> server `gem_templates.gem_type` |
+| 5. Original AI worker | Done in code | Headless `ClientSessionBase` mirror + original AI transaction capture |
+| 6. Arena AI hosting | Done in code | Dingler-style event routing, resync/livelock safety, authoritative submission boundary |
+| 7. RulesPort transaction conversion | Done | Worker intents become typed `RulesTransaction` objects |
+| 8. Python fallback | Done | Original AI failure falls through to existing Python AI |
+| 9. Arena regression layer | Done | Existing hex-server Arena remains authoritative; focused integration tests cover the integration contracts |
+| 10. Build/start/battle validation | CI ready | GitHub Actions builds the worker, verifies submodule pins, runs tests and syntax checks |
+
+## 1. Deck Import
+
+The project includes the Dingler-compatible Hex Codex v1 deck-link decoder:
+
+- URL or bare-code input
+- CRC32 verification
+- unsigned-varint decoding
+- main-deck and reserve sections
+- named deck sections
+- deterministic validation errors
+
+The importer consumes the player's existing `card_instances`. It does not silently mint arbitrary cards beyond the player's collection.
+
+## 2. `/importdeck`
+
+Usage:
+
+`text
+/importdeck <Hex Codex deck link>
+`
+
+The command is handled before the developer-console session gate and reports the imported deck id plus main/reserve counts.
+
+Configure the Hex Codex data files:
+
+`bash
+export HEX_CODEX_DATA=/path/to/hex-codex-data
+`
+
+The directory must contain:
+
+`text
+ids.json
+gems.json
+`
+
+## 3. Reserve persistence
+
+Reserve cards have their own `decks.reserves` JSON field.
+
+They are not merged into the main deck. The profile encoder emits each reserve card with the real reserve flag expected by the client deck representation.
+
+Existing databases are upgraded in place by the normal `static.py` column-ensure path.
+
+## 4. Codex gem mapping
+
+Codex gem IDs are resolved in two steps:
+
+`text
+Codex site gem id
+        ↓
+ids.json → gem GUID
+        ↓
+gems.json → game gem type name
+        ↓
+gem_templates
+        ↓
+numeric EGemTypesNew value
+`
+
+A missing mapping is a hard import error. A Codex site ID is never stored as if it were an `EGemTypesNew` enum number.
+
+## 5. Original AI C# worker
+
+The worker in `legacy-ai-worker/` is a headless runtime bridge for the original `Game.Shared.AI` implementation.
+
+At runtime it can:
+
+1. load the user-provided `Assembly-CSharp-firstpass.dll`;
+2. resolve `Game.Shared.AI.AIPlayer` / `AITactical`;
+3. construct a dynamic `ClientSessionBase` mirror;
+4. deserialize and route `SessionEventArgs`;
+5. capture the original AI's typed transaction;
+6. project the transaction into the integration decision schema.
+
+Configure:
+
+`text
+HEX_CLIENT_DLL=/path/to/Assembly-CSharp-firstpass.dll
+HEX_ORIGINAL_AI=1
+`
+
+The public Dingler source tree does not contain the original client DLL. That binary therefore remains a deployment input, not a missing source file that can legitimately be invented or regenerated from the public repository.
+
+## 6. Arena AI hosting
+
+The Original AI path follows the useful parts of Dingler's Arena hosting model:
+
+- live event routing into an AI mirror;
+- AI-side decision capture;
+- repeated-move suppression;
+- stall detection / resync;
+- livelock detection;
+- void-on-broken-AI behavior rather than awarding a strike;
+- authoritative submission back through hex-server.
+
+The Dingler `HexRulesEngine` is **not** used as a second authority.
+
+## 7. RulesPort transaction boundary
+
+The C# worker returns only an intent, for example:
+
+`json
+{"kind":"play_troop","payload":{"card_id":123}}
+`
+
+The integration layer maps that intent to a typed `RulesTransaction`.
+
+The transaction then goes through:
+
+`text
+Original AI
+   ↓
+decision intent
+   ↓
+RulesTransaction
+   ↓
+RulesPort.submit_transaction()
+   ↓
+authoritative validation
+   ↓
+RulesPort.handle_transaction()
+   ↓
+state/event projection
+`
+
+Supported transaction families include priority pass, resource/card play, ability activation, discard, attack, defense and activation-data continuations.
+
+## 8. Python AI fallback
+
+Original AI is optional.
+
+A disabled, missing, malformed, timed-out or rejected Original AI path falls back to the existing Python AI path. The fallback never bypasses RulesPort when the native lifecycle is active.
+
+The safety policy tracks:
+
+- 15-second AI stall timeout;
+- up to 3 resync attempts;
+- repeated transaction suppression;
+- 5000-move livelock detection per phase key.
+
+## 9. Arena regression layer
+
+The authoritative Arena implementation stays in hex-server.
+
+Dingler Arena source is used for targeted compatibility knowledge rather than copied wholesale. The integration tests exercise:
+
+- DeckLink parsing;
+- main/reserve separation;
+- gem mapping failure behavior;
+- worker protocol;
+- typed decision conversion;
+- fallback behavior;
+- livelock/repeated-signature protection.
+
+When the client-derived `Records/*.jsonl` snapshot is available, the CI workflow also runs the upstream server encoding/commands/Arena regression suites.
+
+## 10. Build and validation
+
+### Local
+
+`bash
 git clone --recurse-submodules https://github.com/Mark007007/HEX-Private-Server.git
 cd HEX-Private-Server
+
 bash scripts/pull_upstreams.sh
 bash scripts/apply_integration.sh
+
 python -m unittest discover -s tests -v
-```
+dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
+`
 
-Run the upstream server according to hex-server/HOWTO.md.
+Run the server using `hex-server/HOWTO.md`.
 
-## Deck import
+### GitHub Actions
 
-Set HEX_CODEX_DATA to a Hex Codex data folder containing ids.json and gems.json, then send `/importdeck <link>` in HEX chat.
-Imported cards use owned card_instances. Main and reserve cards remain separate, and Codex gem GUIDs are resolved through the server gem_templates table to EGemTypesNew numeric values.
+`.github/workflows/ci.yml` now:
 
-## Original AI
+1. checks out both pinned submodules;
+2. verifies both exact upstream commit hashes;
+3. applies the integration overlay;
+4. runs all integration tests;
+5. runs Python syntax checks;
+6. runs server regression tests when client-derived Records are present;
+7. builds the C# Original-AI worker;
+8. performs a worker JSONL health-protocol smoke test.
 
-Set HEX_ORIGINAL_AI=1, HEX_CLIENT_DLL to your own HEX Assembly-CSharp-firstpass.dll, and HEX_ORIGINAL_AI_PLUGIN to an adapter exposing public string Decide(string requestJson).
+## Current verification
 
-The worker never accepts a snapshot as state. It returns only an intent; hex-server converts that intent into a RulesTransaction and validates/submits it through RulesPort. If the worker is unavailable, invalid, or times out, the existing Python AI remains the fallback.
+In the current development sandbox:
+
+`text
+Python integration tests: 7/7 PASS
+Python syntax checks: PASS
+`
+
+The sandbox does not currently have a `dotnet` executable installed, so the C# build is delegated to the GitHub Actions runner. The Original-AI end-to-end battle additionally requires the matching user-owned client DLL and client-derived records.
+
+## Architecture rule
+
+`text
+                    HEX Private Server
+                           │
+                           ▼
+                    hex-server RulesPort
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+        Player transaction          AI decision
+                                         │
+                                  Original AI worker
+                                         │
+                                  typed intent only
+                                         │
+                                         ▼
+                              RulesPort validation
+                                         │
+                                         ▼
+                                  authoritative state
+`
+
+**Dingler is an integration/reference source, not a second server authority.**
