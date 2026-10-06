@@ -1,4 +1,4 @@
-"""Optional Original-AI integration with safe Python fallback."""
+"""Optional Original-AI integration with authoritative RulesPort submission and Python fallback."""
 from __future__ import annotations
 
 import json
@@ -48,12 +48,12 @@ def _adapter_for(handler) -> OriginalAiAdapter:
 def try_native_original_ai(
     handler, session, native_ai_id, human_id, battle_state, port
 ) -> bool:
-    """Use the original client AI once; false means keep the Python AI path."""
+    """Use original Game.Shared.AI; false means keep the existing Python AI."""
     if not _enabled() or port is None:
         return False
 
     snapshot = build_snapshot(
-        handler, session, native_ai_id, human_id, battle_state)
+        handler, session, native_ai_id, human_id, battle_state, port=port)
     personality = (
         getattr(handler, "_ai_deck_personality", None)
         or getattr(handler, "_ai_campaign_personality", None)
@@ -73,9 +73,17 @@ def try_native_original_ai(
             sort_keys=True, separators=(",", ":"),
         )
         if not submit_ai_decision(port, native_ai_id, decision, snapshot):
+            # A rejected original transaction means its mirror is no longer
+            # authoritative. Restart the worker so the next attempt rebuilds
+            # its client-side session from the Python event history.
+            adapter.client.restart()
             return False
         handler._hex_original_ai_last_signature = signature
         handler._hex_original_ai_last_phase = snapshot.get("phase_key")
         return True
     except (AiBridgeError, TimeoutError, OSError, ValueError, RuntimeError):
+        try:
+            adapter.client.restart()
+        except Exception:
+            pass
         return False
