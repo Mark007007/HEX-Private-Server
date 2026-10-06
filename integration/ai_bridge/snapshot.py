@@ -64,14 +64,14 @@ def _event_envelopes_from_game(game, viewer_uid) -> list[dict[str, Any]]:
 def _collect_live_events(session, port, ai_player_id) -> list[dict[str, Any]]:
     """Keep a lossless in-process event history for the headless client mirror."""
     history = getattr(session, "_hex_original_ai_event_history", None)
-    seen = getattr(session, "_hex_original_ai_seen_event_objects", None)
+    seen_games = getattr(session, "_hex_original_ai_seen_games", None)
     sequence = getattr(session, "_hex_original_ai_event_sequence", 0)
     if history is None:
         history = []
         setattr(session, "_hex_original_ai_event_history", history)
-    if seen is None:
-        seen = set()
-        setattr(session, "_hex_original_ai_seen_event_objects", seen)
+    if seen_games is None:
+        seen_games = set()
+        setattr(session, "_hex_original_ai_seen_games", seen_games)
 
     sink = getattr(port, "event_sink", None) if port is not None else None
     games = list(getattr(sink, "_unpublished", ()) or ())
@@ -81,20 +81,22 @@ def _collect_live_events(session, port, ai_player_id) -> list[dict[str, Any]]:
 
     ai_uid = _uid64(ai_player_id)
     for game in games:
-        for source_event in list(getattr(game, "events", ()) or ()):
-            marker = id(source_event)
-            if marker in seen:
-                continue
-            seen.add(marker)
+        events = list(getattr(game, "events", ()) or ())
+        if not events:
+            continue
+        game_marker = id(game)
+        if game_marker in seen_games:
+            continue
+        seen_games.add(game_marker)
 
-            projected = _event_envelopes_from_game(game, ai_uid)
-            # Preserve event ordering even if the visibility projection omitted
-            # a private-to-human event: the authoritative event object itself
-            # is the ordering marker.
-            for item in projected:
-                sequence += 1
-                item["sequence"] = sequence
-                history.append(item)
+        # Project the whole Game once. Game.make_network_packet applies the
+        # same visibility filtering the real client uses, so the C# mirror sees
+        # the AI's legal view rather than the human player's hidden-card view.
+        projected = _event_envelopes_from_game(game, ai_uid)
+        for item in projected:
+            sequence += 1
+            item["sequence"] = sequence
+            history.append(item)
 
     # Persisted event logs are useful for reattached/PvP sessions. They are
     # loaded once and then combined with live PVE/Arena events.
@@ -183,10 +185,6 @@ def build_snapshot(handler, session, ai_player_id, human_player_id, battle_state
             "SELECT * FROM game_cards WHERE session_id=? ORDER BY id",
             (str(getattr(session, "session_id", "")),),
         ).fetchall()
-        snapshot["game_cards"] = [
-            {str(column): _jsonable(row[i]) for i, column in enumerate(rows_tuple)}
-            for rows_tuple in []  # replaced below for clarity
-        ]
         snapshot["game_cards"] = [
             {str(column): _jsonable(row[i]) for i, column in enumerate(columns)}
             for row in rows
