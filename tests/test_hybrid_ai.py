@@ -2,6 +2,10 @@ import unittest
 
 from integration.ai_bridge.adapter import AiDecision
 from integration.ai_bridge.hybrid import HybridAi
+from integration.ai_bridge.live import (
+    _record_original_ai_progress,
+    _reset_original_ai_progress,
+)
 
 
 class HybridAiTests(unittest.TestCase):
@@ -23,6 +27,25 @@ class HybridAiTests(unittest.TestCase):
             hybrid.note_submission("s", "same", phase_key="p"))
         self.assertTrue(
             hybrid.note_submission("s", "same", phase_key="p"))
+
+    def test_live_repeated_original_intent_falls_back_on_third_repeat(self):
+        class Handler:
+            pass
+
+        handler = Handler()
+        self.assertFalse(
+            _record_original_ai_progress(handler, "same", "phase-1")
+        )
+        self.assertFalse(
+            _record_original_ai_progress(handler, "same", "phase-1")
+        )
+        self.assertTrue(
+            _record_original_ai_progress(handler, "same", "phase-1")
+        )
+        _reset_original_ai_progress(handler)
+        self.assertFalse(
+            _record_original_ai_progress(handler, "same", "phase-1")
+        )
 
     def test_new_phase_clears_suppression_state(self):
         class Original:
