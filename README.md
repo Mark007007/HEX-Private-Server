@@ -113,7 +113,7 @@ A missing mapping is a hard import error. A Codex site ID is never stored as if 
 
 ## 5. Original AI C# worker
 
-The worker in `legacy-ai-worker/` is a headless runtime bridge for the original `Game.Shared.AI` implementation.
+The worker in `legacy-ai-worker/` is a headless runtime bridge for the original `Game.Shared.AI` implementation. The worker process is kept alive per server handler so the headless `ClientSessionBase` mirror can preserve decision state across requests.
 
 At runtime it can:
 
@@ -229,19 +229,21 @@ Run the server using `hex-server/HOWTO.md`.
 
 1. checks out both pinned submodules;
 2. verifies both exact upstream commit hashes;
-3. applies the integration overlay;
-4. runs all integration tests;
-5. runs Python syntax checks;
-6. runs server regression tests when client-derived Records are present;
-7. builds the C# Original-AI worker;
-8. performs a worker JSONL health-protocol smoke test.
+3. builds a persistent-worker JSONL client smoke test suite;
+4. applies the integration overlay;
+5. applies the integration overlay;
+6. runs all integration tests;
+7. runs Python syntax checks;
+8. runs server regression tests when client-derived Records are present;
+9. builds the C# Original-AI worker;
+10. performs a worker JSONL health-protocol smoke test.
 
 ## Current verification
 
 In the current development sandbox:
 
 `text
-Python integration tests: 7/7 PASS
+Python integration tests: 9/9 PASS
 Python syntax checks: PASS
 `
 
