@@ -350,6 +350,46 @@ jobs:
               }
           }
 
+      - name: Inspect client card identifier and data bootstrap APIs
+        shell: pwsh
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/Assembly-CSharp-firstpass.dll
+        run: |
+          $asm = [System.Reflection.Assembly]::LoadFrom($env:HEX_CLIENT_DLL)
+          foreach ($name in @(
+            "Game.Shared.SessionCardId",
+            "Game.Shared.CardId",
+            "Game.Shared.FolderUtils",
+            "Game.Shared.BuiltInResources",
+            "Game.Shared.Singleton`1",
+            "Reckoning.Game.TemplateManager",
+            "Game.Shared.Mechanics.ECardCollections"
+          )) {
+            $type = $asm.GetType($name, $false, $false)
+            if ($null -eq $type) { Write-Host "MISSING $name"; continue }
+            Write-Host "TYPE $name"
+            $type.GetConstructors([System.Reflection.BindingFlags] "Instance,Public,NonPublic") |
+              ForEach-Object {
+                $args = ($_.GetParameters() | ForEach-Object {
+                  "$($_.Name):$($_.ParameterType.FullName)"
+                }) -join ", "
+                "ctor($args)"
+              }
+            $type.GetMethods([System.Reflection.BindingFlags] "Instance,Static,Public,NonPublic") |
+              Where-Object { $_.DeclaringType -eq $type -and $_.Name -match '(?i)initialize|load|get|instance|card|template' } |
+              Sort-Object Name |
+              Select-Object -First 80 |
+              ForEach-Object {
+                $args = ($_.GetParameters() | ForEach-Object {
+                  "$($_.Name):$($_.ParameterType.FullName)"
+                }) -join ", "
+                "method $($_.Name)($args) -> $($_.ReturnType.FullName)"
+              }
+            $type.GetFields([System.Reflection.BindingFlags] "Instance,Static,Public,NonPublic") |
+              Where-Object { $_.Name -match '(?i)hand|champion|undefined|invalid|value|id' } |
+              Sort-Object Name |
+              ForEach-Object { "field $($_.Name):$($_.FieldType.FullName) static=$($_.IsStatic)" }
+          }
       - name: Worker protocol smoke test
         shell: bash
         run: |
