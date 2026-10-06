@@ -242,8 +242,31 @@ HEX_GAMEDATA="/你的HEX安装目录/Data/gamedata" bash start.sh
 
 | 输入 | 说明 |
 |---|---|
-| Hex Codex **v1 分享链接** | 需要 `HEX_CODEX_DATA` 指向 `build/codex-data`（由 `scripts/build_codex_ids.py` 生成） |
+| Hex Codex **v1 分享链接** | 需要 `HEX_CODEX_DATA` 指向 `build/codex-data`（**已随仓库提供**，见下方「Hex Codex 目录数据」） |
 | **牌表文本** | 站点渲染的多行格式和 `4x 卡名` 单行格式都支持，**不需要任何数据文件** |
+
+### Hex Codex 目录数据
+
+`build/codex-data/` 已随仓库提交，所以**全新 clone 无需联网即可导入分享链接**：
+
+| 文件 | 内容 |
+|---|---|
+| `ids.json` | 3124 条站点 id → 游戏 GUID 映射（`card` / `champion` / `gem` 三类，id 区间互不重叠） |
+| `gems.json` | 73 条宝石「类型名 → 显示名」映射 |
+
+只有需要**刷新**（站点新增卡牌）时才重新生成；它需要本机已建库，并访问 Hex Codex 卡组构建页：
+
+```bash
+python scripts/build_codex_ids.py --cards-html <卡组构建页URL或本地保存的.html> --player 123
+# 默认输出到 build/codex-data；--records / --db 可覆盖默认路径
+```
+
+站点名到 GUID 的解析按**名称**匹配本地数据库（三类均 100% 命中）。卡名按印次重复，
+因此解析用的是基于 Records 去重后的目录：每个 `m_DesignerCardId` 一行（`DELETE*` 条目丢弃），
+无 designer id 的行按 (name, cost, type, subtype) 合并；仍有多个候选时优先玩家已拥有的印次，
+否则取 guid 最小 —— 保证重复运行结果稳定。
+
+> 与 `hex-server/Records/` 同性质：数据来自客户端/站点，**再分发以其适用授权条款为准**。
 
 ### 设计取舍
 
@@ -311,9 +334,9 @@ HEX_GAMEDATA="/你的HEX安装目录/Data/gamedata" bash start.sh
     │   ├── WINDOWS-SETUP.md        # Windows 原生环境搭建与排障
     │   ├── DECK-IMPORT.md          # 卡组导入子系统（协议/通道/踩坑）
     │   └── GEM-ENCODING.md         # 魔石 EGemTypesNew 编码格式
-    ├── build/                      # 运行时产物
-    │   ├── codex-data/             # ids.json(3124) + gems.json(73)
-    │   └── deck-watch.log / .lock  # 剪贴板助手日志与单实例锁
+    ├── build/                      # 除 codex-data 外均为运行时产物（已 gitignore）
+    │   ├── codex-data/             # ids.json(3124) + gems.json(73) —— 已随仓库提交
+    │   └── deck-watch.log / .lock  # 剪贴板助手日志与单实例锁（忽略）
     ├── local-env.sh                # 本机路径（未跟踪）
     ├── start.bat / start.sh        # 安装 + 自检 + 构建
     ├── start-game.bat / .sh        # 服务器 + 助手 + 游戏
