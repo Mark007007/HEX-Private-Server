@@ -5,6 +5,7 @@ internal static class Program
 {
     private const int Protocol = 1;
     private static OriginalAiRuntime? _runtime;
+    private static string? _runtimeInitError;
 
     public static async Task Main()
     {
@@ -32,7 +33,8 @@ internal static class Program
                             ? new
                             {
                                 status = "blocked",
-                                reason = "HEX_CLIENT_DLL is not configured"
+                                reason = _runtimeInitError ??
+                                         "HEX_CLIENT_DLL is not configured"
                             }
                             : _runtime.Health()),
                     "decide" => Success(
@@ -73,10 +75,12 @@ internal static class Program
         try
         {
             _runtime = new OriginalAiRuntime(dll);
+            _runtimeInitError = null;
         }
-        catch
+        catch (Exception ex)
         {
             _runtime = null;
+            _runtimeInitError = ex.GetBaseException().Message;
         }
     }
 
