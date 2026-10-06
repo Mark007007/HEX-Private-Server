@@ -47,7 +47,7 @@ jobs:
           fi
 
   original-ai-worker:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout integration project
         uses: actions/checkout@v4
@@ -63,23 +63,29 @@ jobs:
         run: dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
 
       - name: Verify uploaded HEX client runtime
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          runtime="$GITHUB_WORKSPACE/.github/workflows"
-          required=(
-            "Assembly-CSharp-firstpass.dll"
-            "ICSharpCode.SharpZipLib.dll"
-            "NCalc.dll"
-            "SampleClassLibrary.dll"
-            "System.EnterpriseServices.dll"
-            "System.Web.Services.dll"
+          $runtime = Join-Path $env:GITHUB_WORKSPACE ".github/workflows"
+          $required = @(
+            "Assembly-CSharp-firstpass.dll",
+            "ICSharpCode.SharpZipLib.dll",
+            "NCalc.dll",
+            "SampleClassLibrary.dll",
+            "System.EnterpriseServices.dll",
+            "System.Web.Services.dll",
             "UnityEngine.dll"
           )
-          for dll in "${required[@]}"; do
-            test -s "$runtime/$dll"
-            echo "found: $dll ($(stat -c%s "$runtime/$dll") bytes)"
-          done
+          foreach ($dll in $required) {
+            $path = Join-Path $runtime $dll
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing client DLL: $path"
+            }
+            $size = (Get-Item -LiteralPath $path).Length
+            if ($size -le 0) {
+              throw "Empty client DLL: $path"
+            }
+            Write-Host "found: $dll ($size bytes)"
+          }
 
       - name: Worker protocol smoke test
         shell: bash
