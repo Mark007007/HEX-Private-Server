@@ -46,22 +46,72 @@ jobs:
         working-directory: hex-server
         run: |
           set -euo pipefail
+          required_records=(
+            Records/CardTemplate.jsonl
+            Records/AbilityTemplate.jsonl
+            Records/EncounterDeck.jsonl
+          )
+          missing=0
+          for path in "${required_records[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              echo "::notice::Skipping authoritative server startup smoke test because $path is missing."
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -ne 0 ]]; then
+            exit 0
+          fi
+
           export HEX_DB_PATH="$RUNNER_TEMP/hex-server-smoke.db"
           export PYTHONPATH="$PWD"
           python -m pip install -q -r requirements.txt
+
           python - <<'PY'
           import socket
-          import threading
+          import subprocess
+          import sys
           import time
-          import hconnect_server
 
-          candidates = []
-          for name in dir(hconnect_server):
-              obj = getattr(hconnect_server, name)
-              if callable(obj) and any(token in name.lower() for token in ("server", "start", "run")):
-                  candidates.append(name)
-          print("hconnect_server startup symbols:", candidates[:50])
-          print("module imported successfully")
+          proc = subprocess.Popen(
+              [sys.executable, "-u", "hconnect_server.py"],
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              text=True,
+          )
+          try:
+              deadline = time.time() + 20
+              last_error = None
+              while time.time() < deadline:
+                  if proc.poll() is not None:
+                      output = proc.stdout.read() if proc.stdout else ""
+                      raise SystemExit(
+                          f"hconnect_server.py exited with {proc.returncode} before TCP 9933 was ready.\n{output}"
+                      )
+                  sock = socket.socket()
+                  sock.settimeout(0.5)
+                  try:
+                      sock.connect(("127.0.0.1", 9933))
+                      print("authoritative HConnect server is listening on 127.0.0.1:9933")
+                      break
+                  except OSError as exc:
+                      last_error = exc
+                      time.sleep(0.5)
+                  finally:
+                      sock.close()
+              else:
+                  output = proc.stdout.read() if proc.stdout else ""
+                  raise SystemExit(
+                      f"hconnect_server.py did not open TCP 9933 within 20s; last error={last_error}\n{output}"
+                  )
+          finally:
+              if proc.poll() is None:
+                  proc.terminate()
+                  try:
+                      proc.wait(timeout=5)
+                  except subprocess.TimeoutExpired:
+                      proc.kill()
+                      proc.wait(timeout=5)
           PY
 
       - name: Server regression tests
