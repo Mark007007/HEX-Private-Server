@@ -31,7 +31,13 @@ jobs:
 
       - name: Server tests
         working-directory: hex-server
-        run: python -m unittest tests.tests_encoding tests.tests_commands tests.tests_arena -v
+        run: |
+          if [[ -f Records/CardTemplate.jsonl && -f Records/AbilityTemplate.jsonl && -f Records/EncounterDeck.jsonl ]]; then
+            python -m unittest tests.tests_encoding tests.tests_commands tests.tests_arena -v
+          else
+            echo "::notice::Skipping upstream server regression tests: client-derived Records/*.jsonl are not included in public upstream."
+            echo "Provide the Records snapshot extracted from HEX Data/gamedata for the full server test suite."
+          fi
 
   original-ai-worker:
     runs-on: ubuntu-latest
