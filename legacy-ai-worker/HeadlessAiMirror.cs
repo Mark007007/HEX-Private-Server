@@ -568,6 +568,15 @@ public sealed class OriginalAiRuntime : IDisposable
         };
     }
 
+    public object DebugSession(ulong sessionUid64, string sessionName)
+    {
+        lock (_gate)
+        {
+            return HeadlessAiMirror.DebugSessionContext(
+                _assembly, sessionUid64, sessionName);
+        }
+    }
+
     public object Probe(
         ulong sessionUid64, ulong aiUid64, ulong humanUid64,
         int aiPosition, string sessionName)
