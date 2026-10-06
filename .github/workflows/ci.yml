@@ -245,6 +245,41 @@ jobs:
           echo "$out" | grep -q '"request_id":"session-debug"'
           echo "$out" | grep -q '"ok":true'
 
+      - name: Inspect client Card and Hand constructors
+        shell: pwsh
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/Assembly-CSharp-firstpass.dll
+        run: |
+          $asm = [System.Reflection.Assembly]::LoadFrom($env:HEX_CLIENT_DLL)
+          $names = @(
+            "Game.Shared.Mechanics.Card",
+            "Game.Shared.Mechanics.Hand",
+            "Game.Shared.Player",
+            "Game.Shared.AIPlayer"
+          )
+          foreach ($name in $names) {
+            $type = $asm.GetType($name, $false, $false)
+            if ($null -eq $type) {
+              Write-Host "MISSING $name"
+              continue
+            }
+            Write-Host "TYPE $name"
+            $type.GetConstructors([System.Reflection.BindingFlags] "Instance,Public,NonPublic") |
+              ForEach-Object {
+                $args = ($_.GetParameters() | ForEach-Object {
+                  "$($_.Name):$($_.ParameterType.FullName)"
+                }) -join ", "
+                "ctor($args)"
+              }
+            $type.GetFields([System.Reflection.BindingFlags] "Instance,Public,NonPublic") |
+              Where-Object { -not $_.IsStatic } |
+              Sort-Object Name |
+              ForEach-Object { "field $($_.Name):$($_.FieldType.FullName) readonly=$($_.IsInitOnly)" }
+            $type.GetProperties([System.Reflection.BindingFlags] "Instance,Public,NonPublic") |
+              Sort-Object Name |
+              ForEach-Object { "property $($_.Name):$($_.PropertyType.FullName) writable=$($_.CanWrite)" }
+          }
+
       - name: Worker protocol smoke test
         shell: bash
         run: |
