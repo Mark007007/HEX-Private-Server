@@ -403,6 +403,48 @@ public sealed class HeadlessAiMirror : IDisposable
         return result;
     }
 
+    private static List<object> DescribeDictionary(System.Collections.IDictionary dict)
+    {
+        var result = new List<object>();
+        foreach (System.Collections.DictionaryEntry entry in dict)
+        {
+            var item = new Dictionary<string, object?>
+            {
+                ["key"] = entry.Key?.ToString(),
+                ["value_type"] = entry.Value?.GetType().FullName
+            };
+
+            if (entry.Value is not null)
+            {
+                var t = entry.Value.GetType();
+                foreach (var name in new[] {
+                    "ChessTimerLimit", "TurnPhaseTimerLimit", "TimeLimit",
+                    "m_TimeLimit", "m_ChessTimerLimit", "m_TurnPhaseTimerLimit",
+                    "Phase", "m_Phase"
+                })
+                {
+                    var p = t.GetProperty(
+                        name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (p is not null)
+                    {
+                        try { item[name] = p.GetValue(entry.Value)?.ToString(); }
+                        catch (Exception ex) { item[name] = "THREW: " + ex.GetBaseException().Message; }
+                    }
+
+                    var f = FindFieldDeep(t, name);
+                    if (f is not null)
+                    {
+                        try { item[name] = f.GetValue(entry.Value)?.ToString(); }
+                        catch (Exception ex) { item[name] = "THREW: " + ex.GetBaseException().Message; }
+                    }
+                }
+            }
+
+            result.Add(item);
+        }
+        return result;
+    }
+
     private static Dictionary<string, object?> DescribeSession(object session)
     {
         var result = new Dictionary<string, object?>
@@ -434,7 +476,12 @@ public sealed class HeadlessAiMirror : IDisposable
             try { value = f.GetValue(session); }
             catch (Exception ex) { result[name] = "THREW: " + ex.GetBaseException().Message; continue; }
             if (value is System.Collections.IDictionary dict)
-                result[name] = new { type = value.GetType().FullName, count = dict.Count };
+            {
+                if (name == "m_SessionStates")
+                    result[name] = DescribeDictionary(dict);
+                else
+                    result[name] = new { type = value.GetType().FullName, count = dict.Count };
+            }
             else
                 result[name] = value?.ToString();
         }
