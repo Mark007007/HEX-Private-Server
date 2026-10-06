@@ -18,12 +18,13 @@ internal static class Program
                 continue;
 
             JsonDocument? doc = null;
+            var action = "";
             try
             {
                 doc = JsonDocument.Parse(line);
                 var root = doc.RootElement;
                 var requestId = root.GetProperty("request_id").GetString() ?? "";
-                var action = root.GetProperty("action").GetString() ?? "";
+                action = root.GetProperty("action").GetString() ?? "";
 
                 object response = action switch
                 {
