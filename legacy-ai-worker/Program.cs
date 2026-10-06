@@ -37,6 +37,9 @@ internal static class Program
                                          "HEX_CLIENT_DLL is not configured"
                             }
                             : _runtime.Health()),
+                    "probe" => Success(
+                        requestId, action,
+                        Probe(root.GetProperty("payload"))),
                     "decide" => Success(
                         requestId, action,
                         Decide(root.GetProperty("payload"))),
@@ -82,6 +85,21 @@ internal static class Program
             _runtime = null;
             _runtimeInitError = ex.GetBaseException().Message;
         }
+    }
+
+    private static object Probe(JsonElement payload)
+    {
+        if (_runtime is null)
+            throw new InvalidOperationException(
+                "Original AI runtime is unavailable; set HEX_CLIENT_DLL to Assembly-CSharp-firstpass.dll");
+
+        var sessionUid64 = ULong(payload, "session_uid64");
+        var aiUid64 = ULong(payload, "ai_player_uid64", "player_id");
+        var humanUid64 = ULong(payload, "human_player_uid64", "opponent_uid64");
+        var aiPosition = Int(payload, "ai_position", 1);
+        var sessionName = String(payload, "session_name", "HEX AI Probe");
+        return _runtime.Probe(
+            sessionUid64, aiUid64, humanUid64, aiPosition, sessionName);
     }
 
     private static object Decide(JsonElement payload)
