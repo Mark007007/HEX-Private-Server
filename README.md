@@ -9,20 +9,53 @@ The goal is a runnable private-server project, not a second competing rules engi
 
 ## Repository layout
 
-`text
-HEX-Private-Server
-├── hex-server/                         # pinned upstream, sole authoritative game server
-├── upstream/Dingler-FrostRingArena/   # pinned Dingler arena branch
-├── integration/
-│   ├── deck_import/                    # Hex Codex v1 decoder + server persistence adapter
-│   └── ai_bridge/                      # Original AI JSONL bridge + RulesPort transaction adapter
-├── overlay/hex-server/                 # reviewed hex-server integration files
-├── legacy-ai-worker/                   # headless Game.Shared AI host
-├── tests/                              # integration/regression tests
-├── scripts/
-└── .github/workflows/ci.yml
-`
+The repository is intentionally split into **authoritative server code**, **upstream references**, and **integration adapters**.
 
+```text
+HEX-Private-Server/
+├── hex-server/                           # Pinned hex-server; sole authoritative RulesPort + game server
+│
+├── upstream/
+│   ├── Dingler-FrostRingArena/           # Pinned Dingler arena branch; AI / Deck Import reference source
+│   ├── INTEGRATION_STATUS.md             # Integration decisions and current status
+│   └── UPSTREAM.lock                     # Exact upstream commit pins
+│
+├── integration/
+│   ├── deck_import/                      # Hex Codex v1 codec + persistence adapter
+│   └── ai_bridge/                        # Original AI JSONL bridge + RulesPort transaction adapter
+│
+├── overlay/
+│   └── hex-server/                       # Reviewed integration overlay applied onto hex-server
+│
+├── legacy-ai-worker/                      # Headless Game.Shared AI host / transaction capture
+│
+├── client-runtime/                       # Supplied HEX client DLLs used by Original AI runtime
+│
+├── tests/                                # Integration, regression, and bridge tests
+│
+├── scripts/                              # Setup, overlay, and upstream maintenance scripts
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml                        # Python + server + Windows/DLL + Original AI CI
+│
+├── .gitmodules                           # Pinned upstream submodule definitions
+└── README.md                             # Project documentation
+```
+
+### Responsibility boundaries
+
+| Area | Responsibility |
+|---|---|
+| `hex-server/` | **Authoritative runtime** — state, rules, transactions, persistence, PVP/PVE |
+| `upstream/Dingler-FrostRingArena/` | Reference source for original-client AI, deck import, and Arena compatibility |
+| `integration/` | Bridges external/client-facing behavior into the authoritative server |
+| `overlay/hex-server/` | Reviewed changes that extend the pinned `hex-server` without creating a second rules engine |
+| `legacy-ai-worker/` | Hosts the original `Game.Shared.AI` runtime and returns AI transaction intent |
+| `client-runtime/` | Deployment/runtime input for the original client AI; not a second server implementation |
+| `tests/` | Prevents regressions across codecs, adapters, AI bridge, and RulesPort conversion |
+
+> **Architecture rule:** `hex-server/` remains the **single source of truth** for game state and rule resolution. Dingler is an integration/reference source, not a second authoritative server.
 ## Fixed upstream versions
 
 | Component | Repository | Ref |
