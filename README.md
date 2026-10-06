@@ -42,12 +42,12 @@ The integration is implemented as a **reviewed overlay on top of the pinned hex-
 | 2. `/importdeck` | Done | Command wired before the developer-console gate |
 | 3. Reserve | Done | Dedicated `decks.reserves` storage + reserve wire flag |
 | 4. Codex Gem mapping | Done | `gems.json` type -> server `gem_templates.gem_type` |
-| 5. Original AI worker | Done in code | Headless `ClientSessionBase` mirror + original AI transaction capture |
-| 6. Arena AI hosting | Done in code | Dingler-style event routing, resync/livelock safety, authoritative submission boundary |
+| 5. Original AI worker | Implemented + CI-probed | Headless `ClientSessionBase` mirror + original AI transaction capture; CI loads the supplied client DLLs |
+| 6. Arena AI hosting | Implemented | Dingler-style event routing, resync/livelock safety, authoritative submission boundary |
 | 7. RulesPort transaction conversion | Done | Worker intents become typed `RulesTransaction` objects |
 | 8. Python fallback | Done | Original AI failure falls through to existing Python AI |
 | 9. Arena regression layer | Done | Existing hex-server Arena remains authoritative; focused integration tests cover the integration contracts |
-| 10. Build/start/battle validation | CI ready | GitHub Actions builds the worker, verifies submodule pins, runs tests and syntax checks |
+| 10. Build/start/battle validation | CI pipeline ready | GitHub Actions builds the worker, validates all seven client DLLs on Windows, loads the original runtime, constructs an AI session mirror, and runs the server tests available without client-derived Records |
 
 ## 1. Deck Import
 
@@ -233,10 +233,10 @@ Run the server using `hex-server/HOWTO.md`.
 4. runs all integration tests;
 5. runs Python syntax checks;
 6. runs server regression tests when client-derived Records are present;
-7. builds the C# Original-AI worker;
+7. builds the C# Original-AI worker on `windows-latest`;
 8. verifies all seven uploaded client DLLs are non-empty;
 9. performs the generic worker JSONL health smoke test;
-10. launches the worker with `Assembly-CSharp-firstpass.dll` and requires `status=ready`.
+10. launches the worker with `Assembly-CSharp-firstpass.dll`, requires `status=ready`, then constructs a real AI session mirror with `action=probe`.
 
 ## Current verification
 
@@ -246,7 +246,8 @@ In the current development sandbox:
 Python integration tests: 9/9 PASS
 Python syntax checks: PASS
 C# build: delegated to GitHub Actions
-Original client runtime health: exercised by CI against the uploaded DLL set
+Original client runtime health: exercised by the Windows CI pipeline against the uploaded DLL set
+Original AI session construction probe: included in the Windows CI pipeline
 `
 
 A full Original-AI end-to-end battle still requires a valid game/session event stream and matching client-derived `Records/*.jsonl` data. The uploaded DLLs remove the previous binary-availability blocker; they do not manufacture missing game-state records.
