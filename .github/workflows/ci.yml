@@ -311,6 +311,45 @@ jobs:
             }
           }
 
+      - name: Inspect client card cache and template APIs
+        shell: pwsh
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/Assembly-CSharp-firstpass.dll
+        run: |
+          $asm = [System.Reflection.Assembly]::LoadFrom($env:HEX_CLIENT_DLL)
+          $names = @(
+            "Game.Shared.Mechanics.SessionCardCache",
+            "Game.Shared.Mechanics.CardContext",
+            "Game.Shared.Mechanics.CardInstanceData",
+            "Reckoning.Game.CardTemplate",
+            "Game.Shared.Mechanics.Abilities.AbilityCollection"
+          )
+          foreach ($name in $names) {
+            $type = $asm.GetType($name, $false, $false)
+            if ($null -eq $type) {
+              Write-Host "MISSING $name"
+              continue
+            }
+            Write-Host "TYPE $name"
+            $type.GetConstructors([System.Reflection.BindingFlags] "Instance,Public,NonPublic") |
+              ForEach-Object {
+                $args = ($_.GetParameters() | ForEach-Object {
+                  "$($_.Name):$($_.ParameterType.FullName)"
+                }) -join ", "
+                "ctor($args)"
+              }
+            $type.GetMethods([System.Reflection.BindingFlags] "Instance,Static,Public,NonPublic") |
+              Where-Object { $_.DeclaringType -eq $type } |
+              Sort-Object Name |
+              Select-Object -First 120 |
+              ForEach-Object {
+                $args = ($_.GetParameters() | ForEach-Object {
+                  "$($_.Name):$($_.ParameterType.FullName)"
+                }) -join ", "
+                "method $($_.Name)($args) -> $($_.ReturnType.FullName)"
+              }
+          }
+
       - name: Worker protocol smoke test
         shell: bash
         run: |
