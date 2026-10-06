@@ -1,5 +1,9 @@
 name: HEX Private Server CI
 
+concurrency:
+  group: hex-private-server-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main]
