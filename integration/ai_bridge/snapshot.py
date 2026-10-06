@@ -142,8 +142,23 @@ def build_snapshot(handler, session, ai_player_id, human_player_id, battle_state
     human_uid64 = _uid64(human_player_id)
     session_uid64 = _uid64(getattr(session, "session_id", 0))
 
+    encounter_data = getattr(session, "encounter_data", {}) or {}
+    if not isinstance(encounter_data, dict):
+        encounter_data = {"value": _jsonable(encounter_data)}
+
+    session_flags = 128
+    for key in ("SessionFlags", "session_flags", "sessionFlags"):
+        if key in encounter_data:
+            try:
+                session_flags = int(encounter_data[key])
+            except (TypeError, ValueError):
+                pass
+            break
+
     snapshot = {
         "session_id": str(getattr(session, "session_id", "")),
+        "encounter_data": _jsonable(encounter_data),
+        "session_flags": session_flags,
         "session_uid64": session_uid64,
         "session_name": str(getattr(session, "session_name", "HEX AI Session") or
                             "HEX AI Session"),
