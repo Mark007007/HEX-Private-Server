@@ -1,0 +1,9 @@
+[submodule "hex-server"]
+	path = hex-server
+	url = https://github.com/IanUtley/hex-server.git
+	branch = main
+
+[submodule "upstream/Dingler-FrostRingArena"]
+	path = upstream/Dingler-FrostRingArena
+	url = https://github.com/RomoSJR/Dingler-FrostRingArena.git
+	branch = arena

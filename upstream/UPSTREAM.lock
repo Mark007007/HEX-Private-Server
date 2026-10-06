@@ -1,0 +1,15 @@
+# HEX Private Server upstream lockfile
+# Exact refs used by the integration project.
+
+[hex-server]
+repository = https://github.com/IanUtley/hex-server.git
+branch = main
+commit = c65f2cf7e78797fb6d9da9a3401345da7cead71d
+license = AGPL-3.0
+
+[dingler-frost-ring-arena]
+repository = https://github.com/RomoSJR/Dingler-FrostRingArena.git
+branch = arena
+commit = 8c06748080ab3fd15d67a6b2f7193615ffd2db02
+license = AGPL-3.0
+third_party_notice = THIRD-PARTY-NOTICES.md
