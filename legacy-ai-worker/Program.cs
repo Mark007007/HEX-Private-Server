@@ -41,6 +41,9 @@ internal static class Program
                     "probe" => Success(
                         requestId, action,
                         Probe(root.GetProperty("payload"))),
+                    "debug-session" => Success(
+                        requestId, action,
+                        DebugSession(root.GetProperty("payload"))),
                     "decide" => Success(
                         requestId, action,
                         Decide(root.GetProperty("payload"))),
@@ -88,6 +91,17 @@ internal static class Program
             _runtime = null;
             _runtimeInitError = ex.GetBaseException().Message;
         }
+    }
+
+    private static object DebugSession(JsonElement payload)
+    {
+        if (_runtime is null)
+            throw new InvalidOperationException(
+                "Original AI runtime is unavailable; set HEX_CLIENT_DLL to Assembly-CSharp-firstpass.dll");
+
+        return _runtime.DebugSession(
+            ULong(payload, "session_uid64"),
+            String(payload, "session_name", "HEX AI Debug"));
     }
 
     private static object Probe(JsonElement payload)
