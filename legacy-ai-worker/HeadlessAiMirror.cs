@@ -62,7 +62,7 @@ public sealed class HeadlessAiMirror : IDisposable
         var transactionType = Required(
             assembly, "Game.Shared.Mechanics.Transactions.Transaction");
         var playerStateType = Required(assembly, "Game.Shared.PlayerState");
-        var aiPlayerType = Required(assembly, "Game.Shared.AI.AIPlayer");
+        var aiPlayerType = Required(assembly, "Game.Shared.AIPlayer");
         var remotePlayerType = Required(assembly, "Game.Shared.RemotePlayer");
         var personalityType = Required(assembly, "Game.Shared.AI.AIPersonality");
         var playerType = Required(assembly, "Game.Shared.Player");
@@ -389,7 +389,7 @@ public sealed class OriginalAiRuntime : IDisposable
 
     public object Health()
     {
-        var ai = _assembly.GetType("Game.Shared.AI.AIPlayer", throwOnError: false) is not null;
+        var ai = _assembly.GetType("Game.Shared.AIPlayer", throwOnError: false) is not null;
         var tactical = _assembly.GetType("Game.Shared.AI.AITactical", throwOnError: false) is not null;
         var session = _assembly.GetType("Game.Shared.ClientSessionBase", throwOnError: false) is not null;
         var events = _assembly.GetType("Game.Shared.SessionEventArgs", throwOnError: false) is not null;
