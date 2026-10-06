@@ -1,33 +1,46 @@
-using System.Reflection;
-using System.Runtime.Loader;
 using System.Text.Json;
+using LegacyAiWorker;
 
 internal static class Program
 {
     private const int Protocol = 1;
-    private static Assembly? _clientAssembly;
-    private static object? _plugin;
-    private static MethodInfo? _decideMethod;
+    private static OriginalAiRuntime? _runtime;
 
     public static async Task Main()
     {
         InitializeRuntime();
+
         string? line;
         while ((line = await Console.In.ReadLineAsync()) is not null)
         {
-            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            JsonDocument? doc = null;
             try
             {
-                using var doc = JsonDocument.Parse(line);
+                doc = JsonDocument.Parse(line);
                 var root = doc.RootElement;
                 var requestId = root.GetProperty("request_id").GetString() ?? "";
                 var action = root.GetProperty("action").GetString() ?? "";
+
                 object response = action switch
                 {
-                    "health" => Success(requestId, action, Health()),
-                    "decide" => Success(requestId, action, Decide(root.GetProperty("payload"))),
-                    _ => Error(requestId, action, "unknown action"),
+                    "health" => Success(
+                        requestId, action,
+                        _runtime is null
+                            ? new
+                            {
+                                status = "blocked",
+                                reason = "HEX_CLIENT_DLL is not configured"
+                            }
+                            : _runtime.Health()),
+                    "decide" => Success(
+                        requestId, action,
+                        Decide(root.GetProperty("payload"))),
+                    _ => Error(requestId, action, "unknown action")
                 };
+
                 Console.WriteLine(JsonSerializer.Serialize(response));
                 await Console.Out.FlushAsync();
             }
@@ -35,97 +48,128 @@ internal static class Program
             {
                 Console.WriteLine(JsonSerializer.Serialize(new
                 {
-                    protocol = Protocol, request_id = "", ok = false, action = "",
-                    payload = new { }, error = ex.Message
+                    protocol = Protocol,
+                    request_id = "",
+                    ok = false,
+                    action = "",
+                    payload = new { },
+                    error = ex.GetBaseException().Message
                 }));
                 await Console.Out.FlushAsync();
+            }
+            finally
+            {
+                doc?.Dispose();
             }
         }
     }
 
     private static void InitializeRuntime()
     {
-        var clientPath = Environment.GetEnvironmentVariable("HEX_CLIENT_DLL");
-        if (!string.IsNullOrWhiteSpace(clientPath) && File.Exists(clientPath))
+        var dll = Environment.GetEnvironmentVariable("HEX_CLIENT_DLL");
+        if (string.IsNullOrWhiteSpace(dll))
+            return;
+
+        try
         {
-            _clientAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(
-                Path.GetFullPath(clientPath));
+            _runtime = new OriginalAiRuntime(dll);
         }
-
-        var pluginPath = Environment.GetEnvironmentVariable("HEX_ORIGINAL_AI_PLUGIN");
-        if (!string.IsNullOrWhiteSpace(pluginPath) && File.Exists(pluginPath))
+        catch
         {
-            var pluginAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(
-                Path.GetFullPath(pluginPath));
-            var entryName = Environment.GetEnvironmentVariable("HEX_ORIGINAL_AI_ENTRY");
-            var type = !string.IsNullOrWhiteSpace(entryName)
-                ? pluginAssembly.GetType(entryName!, false)
-                : pluginAssembly.GetTypes().FirstOrDefault(t =>
-                    t.GetMethod("Decide", BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance,
-                        binder: null, types: new[] { typeof(string) }, modifiers: null) is not null);
-            if (type is null)
-                throw new InvalidOperationException(
-                    "HEX_ORIGINAL_AI_PLUGIN has no public Decide(string) entry point");
-
-            _decideMethod = type.GetMethod(
-                "Decide", BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance,
-                binder: null, types: new[] { typeof(string) }, modifiers: null);
-            if (_decideMethod is null)
-                throw new InvalidOperationException("Original AI Decide(string) method not found");
-            if (!_decideMethod.IsStatic)
-                _plugin = Activator.CreateInstance(type);
+            _runtime = null;
         }
-    }
-
-    private static object Health()
-    {
-        var aiPlayer = _clientAssembly?.GetType("Game.Shared.AI.AIPlayer") is not null;
-        var tactical = _clientAssembly?.GetType("Game.Shared.AI.AITactical") is not null;
-        var plugin = _decideMethod is not null;
-        return new
-        {
-            status = plugin && aiPlayer && tactical ? "ready" : "blocked",
-            client_ai_types = aiPlayer && tactical,
-            plugin,
-            client_assembly = _clientAssembly is not null,
-            required = new[] {
-                "Game.Shared.AI.AIPlayer",
-                "Game.Shared.AI.AITactical",
-                "HEX_ORIGINAL_AI_PLUGIN"
-            }
-        };
     }
 
     private static object Decide(JsonElement payload)
     {
-        if (_decideMethod is null)
+        if (_runtime is null)
             throw new InvalidOperationException(
-                "Original AI runtime is not configured. Set HEX_CLIENT_DLL and HEX_ORIGINAL_AI_PLUGIN. Python AI fallback remains available.");
+                "Original AI runtime is unavailable; set HEX_CLIENT_DLL to Assembly-CSharp-firstpass.dll");
 
-        var request = payload.GetRawText();
-        var result = _decideMethod.IsStatic
-            ? _decideMethod.Invoke(null, new object[] { request })
-            : _decideMethod.Invoke(_plugin, new object[] { request });
+        var sessionUid64 = ULong(payload, "session_uid64");
+        var aiUid64 = ULong(payload, "ai_player_uid64", "player_id");
+        var humanUid64 = ULong(payload, "human_player_uid64", "opponent_uid64");
+        var aiPosition = Int(payload, "ai_position", 1);
+        var sessionName = String(payload, "session_name", "HEX AI Session");
+        var events = new List<EventEnvelope>();
 
-        if (result is null)
-            throw new InvalidOperationException("Original AI returned null");
-
-        var json = result switch
+        if (payload.TryGetProperty("events", out var eventArray) &&
+            eventArray.ValueKind == JsonValueKind.Array)
         {
-            string text => text,
-            JsonDocument document => document.RootElement.GetRawText(),
-            _ => JsonSerializer.Serialize(result),
-        };
-        using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.ValueKind != JsonValueKind.Object)
-            throw new InvalidOperationException("Original AI response is not an object");
-        return JsonSerializer.Deserialize<Dictionary<string, object?>>(json)
-               ?? throw new InvalidOperationException("Original AI response could not be decoded");
+            foreach (var item in eventArray.EnumerateArray())
+            {
+                events.Add(new EventEnvelope(
+                    Int(item, "class_id", 0),
+                    String(item, "data_base64", ""),
+                    Long(item, "sequence", 0)));
+            }
+        }
+
+        return _runtime.Decide(
+            sessionUid64, aiUid64, humanUid64,
+            aiPosition, sessionName, events);
+    }
+
+    private static ulong ULong(JsonElement obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!obj.TryGetProperty(name, out var v))
+                continue;
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetUInt64(out var n))
+                return n;
+            if (v.ValueKind == JsonValueKind.String &&
+                ulong.TryParse(v.GetString(), out n))
+                return n;
+        }
+        return 0;
+    }
+
+    private static long Long(JsonElement obj, string name, long fallback)
+    {
+        if (!obj.TryGetProperty(name, out var v))
+            return fallback;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n))
+            return n;
+        return fallback;
+    }
+
+    private static int Int(JsonElement obj, string name, int fallback)
+    {
+        if (!obj.TryGetProperty(name, out var v))
+            return fallback;
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n))
+            return n;
+        return fallback;
+    }
+
+    private static string String(JsonElement obj, string name, string fallback)
+    {
+        if (!obj.TryGetProperty(name, out var v) ||
+            v.ValueKind != JsonValueKind.String)
+            return fallback;
+        return v.GetString() ?? fallback;
     }
 
     private static object Success(string requestId, string action, object payload) =>
-        new { protocol = Protocol, request_id = requestId, ok = true, action, payload, error = (string?)null };
+        new
+        {
+            protocol = Protocol,
+            request_id = requestId,
+            ok = true,
+            action,
+            payload,
+            error = (string?)null
+        };
 
     private static object Error(string requestId, string action, string error) =>
-        new { protocol = Protocol, request_id = requestId, ok = false, action, payload = new { }, error };
+        new
+        {
+            protocol = Protocol,
+            request_id = requestId,
+            ok = false,
+            action,
+            payload = new { },
+            error
+        };
 }
