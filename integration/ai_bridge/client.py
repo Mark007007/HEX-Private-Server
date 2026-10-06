@@ -100,7 +100,8 @@ class AiBridgeClient:
                 pass
         finally:
             try:
-                proc.stdin.close() if proc.stdin is not None else None
+                if proc.stdin is not None:
+                    proc.stdin.close()
             except Exception:
                 pass
 
@@ -123,8 +124,7 @@ class AiBridgeClient:
 
             try:
                 proc.stdin.write(
-                    encode_request(AiRequest(request_id, action, payload)) + "
-"
+                    encode_request(AiRequest(request_id, action, payload)) + "\n"
                 )
                 proc.stdin.flush()
                 raw_line = self._responses.get(
