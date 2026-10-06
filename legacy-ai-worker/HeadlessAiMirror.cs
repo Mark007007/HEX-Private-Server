@@ -486,7 +486,8 @@ public sealed class OriginalAiRuntime : IDisposable
             foreach (var session in _sessions.Values)
                 session.Dispose();
             _sessions.Clear();
-            _loadContext.Unload();
+            // The client load context is intentionally process-lifetime and non-collectible.
+            // Do not call Unload() on a non-collectible AssemblyLoadContext.
         }
     }
 }
