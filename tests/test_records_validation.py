@@ -37,6 +37,23 @@ class RecordsValidationTests(unittest.TestCase):
             self.assertIn("missing: EncounterDeck.jsonl", errors)
             self.assertNotIn("EncounterDeck", counts)
 
+    def test_missing_header_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_snapshot(root)
+            path = root / "CardTemplate.jsonl"
+            path.write_text(
+                json.dumps(
+                    '{"m_Guid":"00000000-0000-0000-0000-000000000000"}'
+                ) + "\n",
+                encoding="utf-8",
+            )
+            errors, counts = validate_records(root)
+            self.assertTrue(
+                any("CardTemplate.jsonl: missing required first-line header" in x
+                    for x in errors)
+            )
+
     def test_invalid_json_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
