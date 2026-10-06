@@ -601,7 +601,7 @@ public sealed class OriginalAiRuntime : IDisposable
 
     public object Probe(
         ulong sessionUid64, ulong aiUid64, ulong humanUid64,
-        int aiPosition, string sessionName)
+        int aiPosition, string sessionName, ulong sessionFlags = 128)
     {
         lock (_gate)
         {
@@ -627,7 +627,8 @@ public sealed class OriginalAiRuntime : IDisposable
 
     public Dictionary<string, object?> Decide(
         ulong sessionUid64, ulong aiUid64, ulong humanUid64,
-        int aiPosition, string sessionName, IEnumerable<EventEnvelope> events)
+        int aiPosition, string sessionName, ulong sessionFlags,
+        IEnumerable<EventEnvelope> events)
     {
         lock (_gate)
         {
@@ -636,7 +637,7 @@ public sealed class OriginalAiRuntime : IDisposable
             {
                 session = new SessionMirror(
                     _assembly, sessionUid64, aiUid64, humanUid64,
-                    aiPosition, sessionName);
+                    aiPosition, sessionName, sessionFlags);
                 _sessions[key] = session;
             }
 
