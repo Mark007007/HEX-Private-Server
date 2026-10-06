@@ -37,9 +37,17 @@ echo "  $RECORDS_DIR"
     python3 AssetExtraction/extract_records.py
 )
 
-# The pinned server seed loader intentionally skips the first physical line
-# of each Records file. Add the format marker it expects after extraction so
-# the first real record is not silently discarded.
+# gamedata_seed.load_records_text skips exactly one leading line of each
+# Records file, and scripts/validate_records.py requires that same line to be
+# the format marker, so the marker has to take line 0.
+#
+# extract_records.py also emits a synthetic pseudo-record as line 0 of every
+# section: it splits the section body on '$$--$$', and the remainder of the
+# section header itself ("$$$---$$$ <SectionName>") is the first piece. That
+# pseudo-record contains a literal '$$$---$$$', so if it survives into the
+# section stream it terminates the section immediately and every record in it
+# parses to zero -- which silently yields an empty client data seed while the
+# validator still passes. Drop it when present.
 for section in \
   AbilityEffectConditionTemplate \
   AbilityEffectTemplate \
@@ -61,7 +69,10 @@ do
   tmp="$path.tmp"
   {
     printf '%s\n' '# HEX-PRIVATE-SERVER Records v1'
-    cat "$path"
+    case "$(head -n 1 "$path")" in
+      '"$$$---$$$'*) tail -n +2 "$path" ;;
+      *) cat "$path" ;;
+    esac
   } > "$tmp"
   mv "$tmp" "$path"
 done
