@@ -358,6 +358,21 @@ public sealed class HeadlessAiMirror : IDisposable
         return null;
     }
 
+    private static FieldInfo? FindFieldDeep(Type type, string name)
+    {
+        for (var current = type;
+             current is not null;
+             current = current.BaseType)
+        {
+            var field = current.GetField(
+                name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance |
+                       BindingFlags.DeclaredOnly);
+            if (field is not null)
+                return field;
+        }
+        return null;
+    }
+
     private static Dictionary<string, object?> DescribeSession(object session)
     {
         var result = new Dictionary<string, object?>
@@ -381,8 +396,7 @@ public sealed class HeadlessAiMirror : IDisposable
             "m_AIInactivityTimerLimit", "m_SessionId", "m_SessionName"
         })
         {
-            var f = session.GetType().GetField(
-                name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            var f = FindFieldDeep(session.GetType(), name);
             if (f is null)
                 continue;
             object? value;
