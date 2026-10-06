@@ -325,6 +325,29 @@ public sealed class HeadlessAiMirror : IDisposable
 
 public sealed class OriginalAiRuntime : IDisposable
 {
+    private sealed class ClientLoadContext : AssemblyLoadContext
+    {
+        private readonly string _directory;
+
+        public ClientLoadContext(string mainAssemblyPath)
+            : base("HexOriginalClient." + Guid.NewGuid().ToString("N"), isCollectible: false)
+        {
+            _directory = Path.GetDirectoryName(Path.GetFullPath(mainAssemblyPath))
+                ?? throw new InvalidOperationException("Could not determine client DLL directory");
+        }
+
+        protected override Assembly? Load(AssemblyName assemblyName)
+        {
+            if (string.IsNullOrWhiteSpace(assemblyName.Name))
+                return null;
+
+            var candidate = Path.Combine(_directory, assemblyName.Name + ".dll");
+            return File.Exists(candidate)
+                ? LoadFromAssemblyPath(candidate)
+                : null;
+        }
+    }
+
     private sealed class SessionMirror : IDisposable
     {
         public HeadlessAiMirror Mirror { get; }
@@ -347,6 +370,8 @@ public sealed class OriginalAiRuntime : IDisposable
     }
 
     private readonly Assembly _assembly;
+    private readonly ClientLoadContext _loadContext;
+    private readonly string _clientDll;
     private readonly Dictionary<string, SessionMirror> _sessions = new(StringComparer.Ordinal);
     private readonly object _gate = new();
 
@@ -356,16 +381,18 @@ public sealed class OriginalAiRuntime : IDisposable
             throw new ArgumentException("HEX_CLIENT_DLL is empty", nameof(clientDll));
         if (!File.Exists(clientDll))
             throw new FileNotFoundException("HEX client DLL not found", clientDll);
-        _assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(
-            Path.GetFullPath(clientDll));
+
+        _clientDll = Path.GetFullPath(clientDll);
+        _loadContext = new ClientLoadContext(_clientDll);
+        _assembly = _loadContext.LoadFromAssemblyPath(_clientDll);
     }
 
     public object Health()
     {
-        var ai = _assembly.GetType("Game.Shared.AI.AIPlayer") is not null;
-        var tactical = _assembly.GetType("Game.Shared.AI.AITactical") is not null;
-        var session = _assembly.GetType("Game.Shared.ClientSessionBase") is not null;
-        var events = _assembly.GetType("Game.Shared.SessionEventArgs") is not null;
+        var ai = _assembly.GetType("Game.Shared.AI.AIPlayer", throwOnError: false) is not null;
+        var tactical = _assembly.GetType("Game.Shared.AI.AITactical", throwOnError: false) is not null;
+        var session = _assembly.GetType("Game.Shared.ClientSessionBase", throwOnError: false) is not null;
+        var events = _assembly.GetType("Game.Shared.SessionEventArgs", throwOnError: false) is not null;
         return new
         {
             status = ai && tactical && session && events ? "ready" : "blocked",
@@ -373,7 +400,9 @@ public sealed class OriginalAiRuntime : IDisposable
             client_session = session,
             session_events = events,
             active_sessions = _sessions.Count,
-            assembly = _assembly.FullName
+            assembly = _assembly.FullName,
+            client_dll = _clientDll,
+            client_directory = Path.GetDirectoryName(_clientDll)
         };
     }
 
@@ -431,6 +460,7 @@ public sealed class OriginalAiRuntime : IDisposable
             foreach (var session in _sessions.Values)
                 session.Dispose();
             _sessions.Clear();
+            _loadContext.Unload();
         }
     }
 }
