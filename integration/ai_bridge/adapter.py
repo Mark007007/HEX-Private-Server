@@ -35,6 +35,8 @@ class OriginalAiAdapter:
             ),
             "ai_position": int(worker_snapshot.get("ai_position", 1) or 1),
             "personality": personality,
+            "session_flags": int(worker_snapshot.get("session_flags", 128) or 128),
+            "encounter_data": worker_snapshot.get("encounter_data", {}),
             "events": events,
             "snapshot": worker_snapshot,
         }
