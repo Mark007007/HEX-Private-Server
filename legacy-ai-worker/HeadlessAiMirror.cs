@@ -373,11 +373,42 @@ public sealed class HeadlessAiMirror : IDisposable
         return null;
     }
 
+    private static List<object> DescribeBaseTypes(Type type)
+    {
+        var result = new List<object>();
+        for (var current = type; current is not null; current = current.BaseType)
+        {
+            result.Add(new
+            {
+                type = current.FullName,
+                constructors = current.GetConstructors(
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Select(c => string.Join(
+                        ",",
+                        c.GetParameters().Select(p => p.ParameterType.FullName ?? p.ParameterType.Name)))
+                    .ToArray(),
+                fields = current.GetFields(
+                        BindingFlags.Public | BindingFlags.NonPublic |
+                        BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly)
+                    .Where(f => !f.IsLiteral)
+                    .Select(f => new
+                    {
+                        name = f.Name,
+                        type = f.FieldType.FullName ?? f.FieldType.Name,
+                        static_field = f.IsStatic
+                    })
+                    .ToArray()
+            });
+        }
+        return result;
+    }
+
     private static Dictionary<string, object?> DescribeSession(object session)
     {
         var result = new Dictionary<string, object?>
         {
-            ["type"] = session.GetType().FullName
+            ["type"] = session.GetType().FullName,
+            ["base_types"] = DescribeBaseTypes(session.GetType())
         };
         foreach (var name in new[] {
             "ChessTimerLimit", "TimersEnabled", "TurnPhaseTimerLimit"
