@@ -1196,7 +1196,7 @@ def db_update_deck(deck_id, user_id, deck_name=None, cards_json=None,
                    pve_champion_id=None, pvp_champion_guid=None,
                    active_gems_json=None, gem_abilities_json=None,
                    deck_sleeve_guid=None, gameboard_guid=None, coin_guid=None,
-                 reserve_cards_json="[]"):
+                 reserve_cards_json="[]", conn=None):
     values = (("deck_name", deck_name), ("cards", cards_json),
               ("reserves", reserve_cards_json),
               ("pve_champion_id", pve_champion_id),

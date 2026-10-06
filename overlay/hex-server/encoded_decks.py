@@ -8,6 +8,10 @@ import json
 
 from profile_db import db_card_instance_for_encoded_deck
 
+# ``EGemTypesNew.GemFormatBit`` -- set by the client on every packed value it
+# builds (GemHelper.AddGemToGem seeds the aggregate with it).
+GEM_FORMAT_BIT = 1 << 62
+
 def write_varint(buf, val):
     while val >= 0x80:
         buf.write(bytes([(val & 0x7F) | 0x80]))
@@ -91,16 +95,29 @@ def encode_encoded_decks(db_decks, user_id, conn=None):
             return []
 
     def load_gems(raw):
+        # ``decks.active_gems`` holds one packed ``EGemTypesNew`` per instance:
+        # bit 62 marks the packed form and each of the six sockets owns ten
+        # bits.  ``ProfileDeckTemplate.CardDescriptor.Gems`` is a plain
+        # ``List<ulong>`` of gem enum values, so the packed value has to be
+        # split before it is written -- handing the client the packed integer
+        # as a single "gem" makes it discard every socket.
         try:
             value = json.loads(raw or "{}") if isinstance(raw, str) else raw
             if not isinstance(value, dict):
                 return {}
             out = {}
-            for key, value in value.items():
-                if isinstance(value, (list, tuple)):
-                    out[int(key)] = [int(v) for v in value if int(v) > 0]
-                elif value:
-                    out[int(key)] = [int(value)]
+            for key, packed in value.items():
+                if isinstance(packed, (list, tuple)):
+                    gems = [int(v) for v in packed if int(v) > 0]
+                else:
+                    packed = int(packed or 0)
+                    if packed & GEM_FORMAT_BIT:
+                        gems = [(packed >> (10 * slot)) & 0x3FF
+                                for slot in range(6)]
+                        gems = [g for g in gems if g > 0]
+                    else:
+                        gems = [packed] if packed else []
+                out[int(key)] = gems
             return out
         except (TypeError, ValueError, json.JSONDecodeError):
             return {}

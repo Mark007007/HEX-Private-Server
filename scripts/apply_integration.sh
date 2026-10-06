@@ -14,7 +14,12 @@ cp "$ROOT/integration/__init__.py" "$HEX/integration/__init__.py"
 cp "$ROOT/integration/deck_import/"*.py "$HEX/integration/deck_import/"
 cp "$ROOT/integration/ai_bridge/"*.py "$HEX/integration/ai_bridge/"
 
-for name in static.py db.py profile_db.py encoded_decks.py commands.py ai.py; do
+# Whole-file overlay.  hconnect_server.py is upstream's largest source file and
+# carries our patches (deck-inbox tick, ActiveGems 64-bit parse, GetDeckInfo gem
+# forwarding), so it is overlaid too -- which also means an upstream change to
+# that file has to be merged into overlay/hex-server/hconnect_server.py by hand.
+for name in hconnect_server.py deck_inbox.py static.py db.py profile_db.py \
+            encoded_decks.py commands.py ai.py; do
   cp "$ROOT/overlay/hex-server/$name" "$HEX/$name"
 done
 

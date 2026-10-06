@@ -563,6 +563,26 @@ def _full_help_lines():
     ]
 
 
+def _summarise_import(imported, deck_id):
+    """One chat-friendly line describing an import, including what was missing."""
+    parts = [f"Imported deck '{imported.name}' as deck #{deck_id}",
+             f"({len(imported.cards)} main, {len(imported.reserves)} reserve)"]
+    if imported.shortfalls:
+        shown = ", ".join(f"{s.name} {s.taken}/{s.wanted}"
+                          for s in imported.shortfalls[:6])
+        extra = len(imported.shortfalls) - 6
+        parts.append(f"| not owned: {shown}" + (f" (+{extra} more)" if extra > 0 else ""))
+    if getattr(imported, "warnings", None):
+        parts.append("| warnings: " + "; ".join(imported.warnings[:3]))
+    return " ".join(parts)
+
+
+def _refresh_profile(handler):
+    refresh = getattr(handler, "push_profile_stream", None)
+    if callable(refresh):
+        refresh()
+
+
 def _importdeck_command(handler, cmd):
     """Import a Hex Codex deck into the current hex-server profile."""
     import os
@@ -574,16 +594,40 @@ def _importdeck_command(handler, cmd):
     data_root = (os.environ.get("HEX_CODEX_DATA") or
                  os.environ.get("HEX_CODEX_DATA_PATH"))
     if not data_root:
-        return "Deck import is not configured (set HEX_CODEX_DATA to Hex Codex data folder)"
+        return ("Deck import is not configured (set HEX_CODEX_DATA to the Hex Codex "
+                "data folder), or use /importdecktext with a pasted card list")
     try:
         importer = build_hex_server_importer(handler, data_root)
-        imported = importer.build(int(handler.user_profile["id"]), parts[1])
-        deck_id = importer.save(int(handler.user_profile["id"]), imported)
-        refresh = getattr(handler, "push_profile_stream", None)
-        if callable(refresh):
-            refresh()
-        return (f"Imported deck '{imported.name}' as deck #{deck_id} "
-                f"({len(imported.cards)} main, {len(imported.reserves)} reserve)")
+        user_id = int(handler.user_profile["id"])
+        imported = importer.build(user_id, parts[1])
+        deck_id = importer.save(user_id, imported)
+        _refresh_profile(handler)
+        return _summarise_import(imported, deck_id)
+    except Exception as exc:
+        return f"Deck import failed: {exc}"
+
+
+def _importdecktext_command(handler, cmd):
+    """Import a pasted card list.  Needs no Hex Codex data files.
+
+    The chat is single-line, so ';' and '|' are treated as line breaks::
+
+        /importdecktext Champion: Ozawa ; 4x Chill ; Reserves: ; 2x Extinction
+    """
+    from integration.deck_import.hex_server_adapter import build_text_importer
+
+    parts = cmd.strip().split(maxsplit=1)
+    if len(parts) != 2 or not parts[1].strip():
+        return ("Usage: /importdecktext Champion: <name> ; <N>x <Card> ; ... "
+                "[; Reserves: ; <N>x <Card>]")
+    text = parts[1].replace(";", "\n").replace("|", "\n")
+    try:
+        importer = build_text_importer(handler)
+        user_id = int(handler.user_profile["id"])
+        imported = importer.build_from_text(user_id, text)
+        deck_id = importer.save(user_id, imported)
+        _refresh_profile(handler)
+        return _summarise_import(imported, deck_id)
     except Exception as exc:
         return f"Deck import failed: {exc}"
 
@@ -609,6 +653,8 @@ def handle_command(handler, cmd: str, room: str, username: str) -> str:
         return _issue_command(handler, title)
     if action in ("importdeck", "import-deck"):
         return _importdeck_command(handler, cmd)
+    if action in ("importdecktext", "import-deck-text"):
+        return _importdecktext_command(handler, cmd)
     if action in ("help", "commands") and "allowcon" not in getattr(
             hconnect_server, "PROFILE_FEATURE_FLAGS", ()):
         return _public_help_command()
@@ -625,7 +671,7 @@ def handle_command(handler, cmd: str, room: str, username: str) -> str:
     if not parts:
         return ("Commands: !version !arena-cleanup !help !game_end !encounter !hand !zones !playable !gencard "
                 "!update !threshold !resource !pass !phase !draw !discard "
-                "!addcard !top !issue <title> /importdeck <link>")
+                "!addcard !top !issue <title> /importdeck <link> /importdecktext <card list>")
 
     # Accept both the historical ``!command`` spelling and the slash spelling
     # used by the in-client developer console.  Keep the canonical command
