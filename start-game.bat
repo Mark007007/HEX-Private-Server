@@ -14,11 +14,12 @@ if not defined BASH (
   exit /b 1
 )
 
-"%BASH%" "%~dp0start.sh"
+echo Using Git Bash: %BASH%
+"%BASH%" "%~dp0scripts\start-game.sh"
 set EXITCODE=%ERRORLEVEL%
 
 echo.
-if not "%EXITCODE%"=="0" echo HEX Private Server stopped with error code %EXITCODE%.
+if not "%EXITCODE%"=="0" echo HEX launcher exited with code %EXITCODE%.
 pause
 exit /b %EXITCODE%
 

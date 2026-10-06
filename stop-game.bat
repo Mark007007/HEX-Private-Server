@@ -5,7 +5,6 @@ cd /d "%~dp0"
 call :find_bash
 if not defined BASH (
   echo Git Bash was not found.
-  echo.
   echo Install Git for Windows ^(it includes Git Bash^), or point GIT_BASH at
   echo bash.exe, for example:
   echo     set GIT_BASH=C:\Program Files\Git\bin\bash.exe
@@ -14,11 +13,11 @@ if not defined BASH (
   exit /b 1
 )
 
-"%BASH%" "%~dp0start.sh"
+"%BASH%" "%~dp0scripts\stop-game.sh" %*
 set EXITCODE=%ERRORLEVEL%
 
 echo.
-if not "%EXITCODE%"=="0" echo HEX Private Server stopped with error code %EXITCODE%.
+if not "%EXITCODE%"=="0" echo stop-game exited with code %EXITCODE%.
 pause
 exit /b %EXITCODE%
 
@@ -44,13 +43,11 @@ for %%B in (
 )
 if defined BASH goto :eof
 
-rem Git\bin may already be on PATH.
 for /f "delims=" %%G in ('where bash 2^>nul') do (
   if not defined BASH set "BASH=%%~G"
 )
 if defined BASH goto :eof
 
-rem Last resort: derive it from wherever git.exe was found (...\Git\cmd\git.exe).
 for /f "delims=" %%G in ('where git 2^>nul') do call :derive_bash "%%~G"
 goto :eof
 
