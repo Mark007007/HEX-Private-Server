@@ -406,6 +406,32 @@ public sealed class OriginalAiRuntime : IDisposable
         };
     }
 
+    public object Probe(
+        ulong sessionUid64, ulong aiUid64, ulong humanUid64,
+        int aiPosition, string sessionName)
+    {
+        lock (_gate)
+        {
+            var key = $"{sessionUid64}:{aiUid64}";
+            if (!_sessions.ContainsKey(key))
+            {
+                _sessions[key] = new SessionMirror(
+                    _assembly, sessionUid64, aiUid64, humanUid64,
+                    aiPosition, sessionName);
+            }
+
+            return new
+            {
+                status = "ready",
+                session_uid64 = sessionUid64,
+                ai_uid64 = aiUid64,
+                human_uid64 = humanUid64,
+                ai_position = aiPosition,
+                active_sessions = _sessions.Count
+            };
+        }
+    }
+
     public Dictionary<string, object?> Decide(
         ulong sessionUid64, ulong aiUid64, ulong humanUid64,
         int aiPosition, string sessionName, IEnumerable<EventEnvelope> events)
