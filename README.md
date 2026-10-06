@@ -347,8 +347,12 @@ Hex Codex 目录数据（`build/codex-data`）**已随仓库提交**，因此第
 ### 一键复跑这套检查
 
 ```bash
-python scripts/validate_deck_import.py --player 123
+python scripts/validate_deck_import.py
 ```
+
+脚本会先读 `local-env.sh`，所以默认就用启动器那套玩家/目录/数据库配置，通常无需任何参数。
+优先级：`--player` > 环境变量 > `local-env.sh`（文件里的 Git Bash 形式路径
+`/d/game/...` 会自动转成原生路径）。
 
 它验证的是**部署后的 `hex-server/` 树**（也就是 clone + `apply_integration.sh` 的结果），
 因此能抓到测试套件抓不到的那类问题：**改了 `integration/` 或 `overlay/` 却忘了重新 apply**

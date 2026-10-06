@@ -18,6 +18,10 @@ SQLite's backup API into a temporary file, ``HEX_DB_PATH`` points the server at
 that copy, and the copy is deleted afterwards.  The inbox is redirected to a
 temporary directory for the same reason.
 
+``local-env.sh`` is read first, so the run defaults to the same player, catalog
+and database the launcher uses.  Precedence is ``--player`` > environment >
+``local-env.sh``.
+
 Usage::
 
     python scripts/validate_deck_import.py
@@ -33,6 +37,7 @@ import binascii
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import sys
 import tempfile
@@ -41,6 +46,7 @@ REPO = Path(__file__).resolve().parents[1]
 HEX = REPO / "hex-server"
 LIVE_DB = HEX / "hconnect.db"
 CODEX_DATA = REPO / "build" / "codex-data"
+LOCAL_ENV = REPO / "local-env.sh"
 
 # The upstream parse of the client's saved gems, before this project patched it.
 UPSTREAM_MASK_BUG = "unhexlify(seg[17]))[0] & 0xFFFFFFFF"
@@ -60,6 +66,67 @@ def section(title: str) -> None:
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+
+
+_ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+# Git Bash writes paths as /d/game/... because bash wants that form.
+_POSIX_DRIVE = re.compile(r"^/([A-Za-z])/(.*)$")
+
+
+def to_native_path(value: str) -> str:
+    """Translate the Git Bash path form into a native one.
+
+    ``start-game.sh`` can use ``/d/game/...`` directly; Python cannot -- it
+    resolves that to ``D:\\d\\game\\...`` and the catalog is not found.  Only
+    values that start with a slash are touched, which is every path in
+    ``local-env.sh`` and no other setting it holds.
+    """
+    if os.name != "nt":
+        return value
+    match = _POSIX_DRIVE.match(value)
+    if match:
+        return f"{match.group(1).upper()}:\\" + match.group(2).replace("/", "\\")
+    return value
+
+
+def load_local_env(path: Path) -> tuple[dict[str, str], list[str]]:
+    """Fill unset environment variables from ``local-env.sh``.
+
+    ``start-game.sh`` sources this file, so reading it here keeps the validator
+    on the same player, database and catalog the launcher uses -- otherwise
+    every run needs ``--player`` even though the launcher already knows it.
+
+    Precedence is ``--player`` > environment > this file: a variable already
+    present in the environment is left alone, so an ad-hoc override still wins.
+
+    The file is a plain KEY=VALUE list.  Shell expansion is not performed, so a
+    value that looks like it needs it is reported and skipped rather than read
+    literally and silently used.
+    """
+    if not path.is_file():
+        return {}, []
+
+    applied: dict[str, str] = {}
+    warnings: list[str] = []
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = _ASSIGNMENT.match(raw)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if "$" in value or "`" in value:
+            warnings.append(f"{key} 的值含 shell 展开（{value}），未解析")
+            continue
+        if value.startswith("/"):
+            value = to_native_path(value)
+        if key not in os.environ:
+            os.environ[key] = value
+            applied[key] = value
+    return applied, warnings
 
 
 # --- 1. the overlay must actually be applied --------------------------------
@@ -182,10 +249,15 @@ def cleanup_workdir(workdir: Path, keep: bool) -> None:
 
 
 def main() -> int:
+    # Read the launcher's config first, so --player can default to the same
+    # player, database and catalog start-game.sh would use.
+    applied, env_warnings = load_local_env(LOCAL_ENV)
+
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--player", default=os.environ.get("HEX_DECK_USER"),
-                        help="player name or id (default: the only one in the database)")
+                        help="player name or id (default: HEX_DECK_USER, else the "
+                             "only player in the database)")
     parser.add_argument("--keep-workdir", action="store_true",
                         help="keep the temporary database and inbox for inspection")
     args = parser.parse_args()
@@ -194,6 +266,16 @@ def main() -> int:
     print("=" * 62)
 
     section("[0] 前置条件")
+    if LOCAL_ENV.is_file():
+        if applied:
+            print(f"  INFO  local-env.sh 已加载，填充: {', '.join(sorted(applied))}")
+        else:
+            print("  INFO  local-env.sh 已读取（各项均已被环境变量覆盖）")
+    else:
+        print("  INFO  local-env.sh 不存在，使用环境变量 / --player")
+    for warning in env_warnings:
+        print(f"  WARN  {warning}")
+
     if not check("hex-server/hconnect.db 存在（已建库）", LIVE_DB.is_file(), str(LIVE_DB)):
         print("\n  -> 先建库: HEX_GAMEDATA=<客户端>/Data/gamedata "
               "bash scripts/prepare_client_records.sh")
