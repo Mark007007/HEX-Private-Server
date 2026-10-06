@@ -62,19 +62,19 @@ AI_OUTPUT="$(
   | HEX_CLIENT_DLL="$HEX_CLIENT_DLL" dotnet "$AI_DLL"
 )"
 printf "%s\n" "$AI_OUTPUT"
-grep -q ""status":"ready"" <<<"$AI_OUTPUT" || die "Original-AI health check failed."
+grep -q "ready" <<<"$AI_OUTPUT" || die "Original-AI health check failed."
 grep -q "selftest-probe" <<<"$AI_OUTPUT" || die "Original-AI session probe did not return."
 
 RECORDS_DIR="${HEX_RECORDS:-$ROOT/hex-server/Records}"
 if [[ -n "${HEX_GAMEDATA:-}" ]]; then
   echo
-echo "[HEX] HEX_GAMEDATA supplied; generating Records ..."
+  echo "[HEX] HEX_GAMEDATA supplied; generating Records ..."
   HEX_GAMEDATA="$HEX_GAMEDATA" bash "$ROOT/scripts/prepare_client_records.sh"
 fi
 
 if [[ -d "$RECORDS_DIR" ]] && "$PYTHON" "$ROOT/scripts/validate_records.py" "$RECORDS_DIR" >/dev/null 2>&1; then
   echo
-echo "============================================================"
+  echo "============================================================"
 echo " All checks passed. Starting HEX server."
 echo "============================================================"
   export HEX_USE_SUPERVISOR="${HEX_USE_SUPERVISOR:-0}"
