@@ -106,3 +106,18 @@ jobs:
           echo "$out"
           echo "$out" | grep -q '"request_id":"client-health"'
           echo "$out" | grep -q '"status":"ready"'
+
+      - name: Original AI session construction probe
+        shell: bash
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/.github/workflows/Assembly-CSharp-firstpass.dll
+        run: |
+          set -euo pipefail
+          out="$(
+            printf '%s\n' '{"protocol":1,"request_id":"client-probe","action":"probe","payload":{"session_uid64":900001,"ai_player_uid64":900002,"human_player_uid64":900003,"ai_position":1,"session_name":"CI Original AI Probe"}}' |
+            dotnet legacy-ai-worker/bin/Release/net10.0/LegacyAiWorker.dll
+          )"
+          echo "$out"
+          echo "$out" | grep -q '"request_id":"client-probe"'
+          echo "$out" | grep -q '"status":"ready"'
+          echo "$out" | grep -q '"active_sessions":1'
