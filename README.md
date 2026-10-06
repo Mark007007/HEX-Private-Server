@@ -131,7 +131,7 @@ HEX_CLIENT_DLL=/path/to/Assembly-CSharp-firstpass.dll
 HEX_ORIGINAL_AI=1
 `
 
-The public Dingler source tree does not contain the original client DLL. That binary therefore remains a deployment input, not a missing source file that can legitimately be invented or regenerated from the public repository.
+The integration repository now includes the seven user-supplied HEX client runtime DLLs under `.github/workflows/` so the CI runner can perform a real client-runtime load check. The worker does not require them at compile time; at runtime it resolves sibling managed DLLs from the same directory as `Assembly-CSharp-firstpass.dll`.
 
 ## 6. Arena AI hosting
 
@@ -229,14 +229,14 @@ Run the server using `hex-server/HOWTO.md`.
 
 1. checks out both pinned submodules;
 2. verifies both exact upstream commit hashes;
-3. builds a persistent-worker JSONL client smoke test suite;
-4. applies the integration overlay;
-5. applies the integration overlay;
-6. runs all integration tests;
-7. runs Python syntax checks;
-8. runs server regression tests when client-derived Records are present;
-9. builds the C# Original-AI worker;
-10. performs a worker JSONL health-protocol smoke test.
+3. applies the integration overlay;
+4. runs all integration tests;
+5. runs Python syntax checks;
+6. runs server regression tests when client-derived Records are present;
+7. builds the C# Original-AI worker;
+8. verifies all seven uploaded client DLLs are non-empty;
+9. performs the generic worker JSONL health smoke test;
+10. launches the worker with `Assembly-CSharp-firstpass.dll` and requires `status=ready`.
 
 ## Current verification
 
@@ -245,9 +245,11 @@ In the current development sandbox:
 `text
 Python integration tests: 9/9 PASS
 Python syntax checks: PASS
+C# build: delegated to GitHub Actions
+Original client runtime health: exercised by CI against the uploaded DLL set
 `
 
-The sandbox does not currently have a `dotnet` executable installed, so the C# build is delegated to the GitHub Actions runner. The Original-AI end-to-end battle additionally requires the matching user-owned client DLL and client-derived records.
+A full Original-AI end-to-end battle still requires a valid game/session event stream and matching client-derived `Records/*.jsonl` data. The uploaded DLLs remove the previous binary-availability blocker; they do not manufacture missing game-state records.
 
 ## Architecture rule
 
@@ -273,3 +275,18 @@ The sandbox does not currently have a `dotnet` executable installed, so the C# b
 `
 
 **Dingler is an integration/reference source, not a second server authority.**
+
+
+## Client DLLs
+
+The repository contains the seven HEX client managed DLLs supplied for this integration:
+
+- `Assembly-CSharp-firstpass.dll`
+- `ICSharpCode.SharpZipLib.dll`
+- `NCalc.dll`
+- `SampleClassLibrary.dll`
+- `System.EnterpriseServices.dll`
+- `System.Web.Services.dll`
+- `UnityEngine.dll`
+
+They are deployment inputs from the user-owned client installation. Anyone redistributing this repository should separately verify that redistribution is permitted by the applicable HEX/Unity/client terms; the repository's AGPL license does not grant third-party rights to proprietary client binaries.
