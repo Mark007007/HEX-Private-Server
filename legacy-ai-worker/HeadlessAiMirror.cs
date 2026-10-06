@@ -49,14 +49,15 @@ public sealed class HeadlessAiMirror : IDisposable
         ulong aiUid64,
         ulong humanUid64,
         int aiPosition,
-        string sessionName)
+        string sessionName,
+        ulong sessionFlags = 128)
     {
         string stage = "start";
         try
         {
             return CreateCore(
                 assembly, sessionUid64, aiUid64, humanUid64,
-                aiPosition, sessionName);
+                aiPosition, sessionName, sessionFlags);
         }
         catch (Exception ex)
         {
@@ -71,7 +72,8 @@ public sealed class HeadlessAiMirror : IDisposable
         ulong aiUid64,
         ulong humanUid64,
         int aiPosition,
-        string sessionName)
+        string sessionName,
+        ulong sessionFlags)
     {
         string stage = "type lookup";
         try
@@ -130,7 +132,7 @@ public sealed class HeadlessAiMirror : IDisposable
         SetMember(state, "MaximumPlayerCount", 2);
 
         stage = "construct SessionStateEncounterData";
-        var encounterData = CreateEncounterData(assembly, uidType);
+        var encounterData = CreateEncounterData(assembly, uidType, sessionFlags);
         SetOptionalMember(state, "EncounterData", encounterData);
 
         stage = "construct AI PlayerState";
@@ -431,7 +433,8 @@ public sealed class HeadlessAiMirror : IDisposable
         return p?.GetValue(null);
     }
 
-    private static object CreateEncounterData(Assembly assembly, Type uidType)
+    private static object CreateEncounterData(
+        Assembly assembly, Type uidType, ulong sessionFlags)
     {
         var type = RequiredType(
             assembly, "Game.Shared.SessionStateEncounterData");
@@ -444,7 +447,7 @@ public sealed class HeadlessAiMirror : IDisposable
         if (flagsType is not null)
             SetOptionalMember(
                 encounter, "SessionFlags",
-                Enum.ToObject(flagsType, 128)); // ESessionFlags.IsPvEArena
+                Enum.ToObject(flagsType, unchecked((long)sessionFlags)));
 
         SetOptionalMember(encounter, "ArenaInstance", 0UL);
         SetOptionalMember(encounter, "ArenaOwner", 0UL);
@@ -539,11 +542,12 @@ public sealed class OriginalAiRuntime : IDisposable
             ulong aiUid64,
             ulong humanUid64,
             int aiPosition,
-            string sessionName)
+            string sessionName,
+            ulong sessionFlags)
         {
             Mirror = HeadlessAiMirror.Create(
                 assembly, sessionUid64, aiUid64, humanUid64,
-                aiPosition, sessionName);
+                aiPosition, sessionName, sessionFlags);
         }
 
         public void Dispose() => Mirror.Dispose();
@@ -606,7 +610,7 @@ public sealed class OriginalAiRuntime : IDisposable
             {
                 _sessions[key] = new SessionMirror(
                     _assembly, sessionUid64, aiUid64, humanUid64,
-                    aiPosition, sessionName);
+                    aiPosition, sessionName, sessionFlags);
             }
 
             return new
