@@ -131,7 +131,7 @@ HEX_CLIENT_DLL=/path/to/Assembly-CSharp-firstpass.dll
 HEX_ORIGINAL_AI=1
 `
 
-The seven user-supplied HEX client runtime DLLs are staged by CI into the same layout used by Dingler: the three compile-time references go under `upstream/Dingler-FrostRingArena/DLLs/`, and all seven runtime DLLs go under `upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/`. The worker does not require them at compile time; at runtime it resolves sibling managed DLLs from the same directory as `Assembly-CSharp-firstpass.dll`.
+The seven user-supplied HEX client runtime DLLs live in `client-runtime/` in this integration repository. Local setup and CI stage them into the exact layout used by Dingler: the three compile-time references go under `upstream/Dingler-FrostRingArena/DLLs/`, and all seven runtime DLLs go under `upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/`. The worker does not require them at compile time; at runtime it resolves sibling managed DLLs from the same directory as `Assembly-CSharp-firstpass.dll`.
 
 ## 6. Arena AI hosting
 
@@ -217,6 +217,7 @@ cd HEX-Private-Server
 bash scripts/pull_upstreams.sh
 bash scripts/apply_integration.sh
 
+# This also stages client-runtime/ into Dingler's documented DLLs/ and bin/Release/net10.0/ paths.
 python -m unittest discover -s tests -v
 dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
 `
@@ -249,6 +250,7 @@ C# build: delegated to GitHub Actions
 Original client runtime health: exercised by the Windows CI pipeline from the Dingler runtime layout
 Original AI session construction probe: included in the Windows CI pipeline
 Dingler reference build: included in the Windows CI pipeline
+Client DLL source layout: `client-runtime/` → Dingler `DLLs/` + `Dingler.Terminal/bin/Release/net10.0/`
 `
 
 A full Original-AI end-to-end battle still requires a valid game/session event stream and matching client-derived `Records/*.jsonl` data. The uploaded DLLs remove the previous binary-availability blocker; they do not manufacture missing game-state records.
@@ -281,7 +283,7 @@ A full Original-AI end-to-end battle still requires a valid game/session event s
 
 ## Client DLLs
 
-The repository contains the seven HEX client managed DLLs supplied for this integration:
+The repository contains the seven HEX client managed DLLs supplied for this integration under `client-runtime/`:
 
 - `Assembly-CSharp-firstpass.dll`
 - `ICSharpCode.SharpZipLib.dll`
