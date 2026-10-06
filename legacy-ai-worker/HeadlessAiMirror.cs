@@ -138,6 +138,8 @@ public sealed class HeadlessAiMirror : IDisposable
 
     public IReadOnlyList<object> Transactions => _sink.Transactions;
 
+    public void ClearTransactions() => _sink.Clear();
+
     public void Route(int classId, byte[] data)
     {
         var e = _buildArgs.Invoke(null, new object[] { classId, data });
