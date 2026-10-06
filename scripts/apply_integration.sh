@@ -35,4 +35,18 @@ else
   echo "Dingler submodule or client-runtime directory not present; skipping DLL staging."
 fi
 
+# The pinned upstream restart.sh contains the original developer absolute checkout path.
+# Replace it with the current submodule directory so the project is portable.
+python3 - "$HEX/restart.sh" <<PY
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = "BASE_DIR=\"/home/ianutley/Hex\""
+new = "BASE_DIR=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\""
+if old in text:
+    path.write_text(text.replace(old, new, 1))
+PY
+
 echo "Integration applied to $HEX"
