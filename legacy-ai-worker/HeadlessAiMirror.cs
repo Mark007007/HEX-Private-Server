@@ -420,7 +420,8 @@ public sealed class HeadlessAiMirror : IDisposable
                 foreach (var name in new[] {
                     "ChessTimerLimit", "TurnPhaseTimerLimit", "TimeLimit",
                     "m_TimeLimit", "m_ChessTimerLimit", "m_TurnPhaseTimerLimit",
-                    "Phase", "m_Phase"
+                    "Phase", "m_Phase", "Timer", "m_Timer", "TurnPhase", "m_TurnPhase",
+                    "State", "m_State", "InitialTime", "m_InitialTime"
                 })
                 {
                     var p = t.GetProperty(
@@ -438,6 +439,24 @@ public sealed class HeadlessAiMirror : IDisposable
                         catch (Exception ex) { item[name] = "THREW: " + ex.GetBaseException().Message; }
                     }
                 }
+            }
+
+            if (entry.Value is not null)
+            {
+                var type = entry.Value.GetType();
+                var fieldSummary = new Dictionary<string, string?>();
+                foreach (var field in type.GetFields(
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                {
+                    if (field.IsStatic ||
+                        !field.Name.Contains("timer", StringComparison.OrdinalIgnoreCase) &&
+                        !field.Name.Contains("phase", StringComparison.OrdinalIgnoreCase) &&
+                        !field.Name.Contains("state", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    try { fieldSummary[field.Name] = field.GetValue(entry.Value)?.ToString(); }
+                    catch (Exception ex) { fieldSummary[field.Name] = "THREW: " + ex.GetBaseException().Message; }
+                }
+                item["timer_phase_fields"] = fieldSummary;
             }
 
             result.Add(item);
