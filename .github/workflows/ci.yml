@@ -11,40 +11,65 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout integration project
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - name: Verify pinned upstream commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C hex-server rev-parse HEAD)" = "c65f2cf7e78797fb6d9da9a3401345da7cead71d"
+          test "$(git -C upstream/Dingler-FrostRingArena rev-parse HEAD)" = "8c06748080ab3fd15d67a6b2f7193615ffd2db02"
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Apply integration
+      - name: Apply integration overlay
         run: bash scripts/apply_integration.sh
 
-      - name: Python integration tests
+      - name: Integration tests
         run: python -m unittest discover -s tests -v
 
-      - name: Syntax check
+      - name: Python syntax check
         run: python -m py_compile $(find integration hex-server -name '*.py' -print)
 
-      - name: Server tests
+      - name: Server regression tests
         working-directory: hex-server
         run: |
           if [[ -f Records/CardTemplate.jsonl && -f Records/AbilityTemplate.jsonl && -f Records/EncounterDeck.jsonl ]]; then
             python -m unittest tests.tests_encoding tests.tests_commands tests.tests_arena -v
           else
-            echo "::notice::Skipping upstream server regression tests: client-derived Records/*.jsonl are not included in public upstream."
-            echo "Provide the Records snapshot extracted from HEX Data/gamedata for the full server test suite."
+            echo "::notice::Skipping upstream server regression tests because the public upstream tree does not include the client-derived Records/*.jsonl snapshot."
           fi
 
   original-ai-worker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout integration project
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+
       - name: Build Original AI worker
-        run: dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release
+        run: dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
+
+      - name: Worker protocol smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$(
+            printf '%s\n' '{"protocol":1,"request_id":"ci-health","action":"health","payload":{}}' |
+            dotnet legacy-ai-worker/bin/Release/net10.0/LegacyAiWorker.dll
+          )"
+          echo "$out"
+          echo "$out" | grep -q '"request_id":"ci-health"'
+          echo "$out" | grep -Eq '"status":"blocked"|"status":"ready"'
