@@ -344,6 +344,25 @@ Hex Codex 目录数据（`build/codex-data`）**已随仓库提交**，因此第
 - 魔石在游戏内卡牌上的显示与对局中生效
 - Original AI 全链路（见文末「已知未自动化验证的部分」）
 
+### 一键复跑这套检查
+
+```bash
+python scripts/validate_deck_import.py --player 123
+```
+
+它验证的是**部署后的 `hex-server/` 树**（也就是 clone + `apply_integration.sh` 的结果），
+因此能抓到测试套件抓不到的那类问题：**改了 `integration/` 或 `overlay/` 却忘了重新 apply**
+—— 单元测试照样全绿，而运行中的服务器还是旧代码。
+
+1. overlay 是否真的应用（`deck_inbox.py` 在不在、上游那个 32 位截断掩码是否已消失）
+2. 牌表文本与 Hex Codex 分享链接**是否都能经 `hex-server/deck-inbox/` 真正入库**
+   —— 就是 Ctrl+V 助手走的那条通道
+3. 出站 profile 载荷里的宝石**是否为单颗枚举值**，而不是打包整数
+
+**它不碰你的真库**：`hex-server/hconnect.db` 经 SQLite backup API 复制到临时文件，
+`HEX_DB_PATH` 指向副本，跑完删除；`HEX_DECK_INBOX` 同样重定向到临时目录。
+退出码 `0` = 全部通过，`1` = 有失败项（CI 可用）。
+
 ## 📁 项目结构
 
     HEX-Private-Server/
@@ -363,7 +382,7 @@ Hex Codex 目录数据（`build/codex-data`）**已随仓库提交**，因此第
     ├── legacy-ai-worker/           # 原版 Game.Shared.AI Headless Worker
     ├── client-runtime/             # HEX 客户端 managed DLL
     ├── tests/                      # 集成与回归测试
-    ├── scripts/                    # 安装 / 同步 / Records / 启动 / 剪贴板助手
+    ├── scripts/                    # 安装 / 同步 / Records / 启动 / 助手 / 验证
     ├── docs/                       # 技术细节记录
     │   ├── WINDOWS-SETUP.md        # Windows 原生环境搭建与排障
     │   ├── DECK-IMPORT.md          # 卡组导入子系统（协议/通道/踩坑）
