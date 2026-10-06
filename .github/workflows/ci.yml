@@ -62,6 +62,25 @@ jobs:
       - name: Build Original AI worker
         run: dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
 
+      - name: Verify uploaded HEX client runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$GITHUB_WORKSPACE/.github/workflows"
+          required=(
+            "Assembly-CSharp-firstpass.dll"
+            "ICSharpCode.SharpZipLib.dll"
+            "NCalc.dll"
+            "SampleClassLibrary.dll"
+            "System.EnterpriseServices.dll"
+            "System.Web.Services.dll"
+            "UnityEngine.dll"
+          )
+          for dll in "${required[@]}"; do
+            test -s "$runtime/$dll"
+            echo "found: $dll ($(stat -c%s "$runtime/$dll") bytes)"
+          done
+
       - name: Worker protocol smoke test
         shell: bash
         run: |
@@ -73,3 +92,17 @@ jobs:
           echo "$out"
           echo "$out" | grep -q '"request_id":"ci-health"'
           echo "$out" | grep -Eq '"status":"blocked"|"status":"ready"'
+
+      - name: Original AI client runtime health test
+        shell: bash
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/.github/workflows/Assembly-CSharp-firstpass.dll
+        run: |
+          set -euo pipefail
+          out="$(
+            printf '%s\n' '{"protocol":1,"request_id":"client-health","action":"health","payload":{}}' |
+            dotnet legacy-ai-worker/bin/Release/net10.0/LegacyAiWorker.dll
+          )"
+          echo "$out"
+          echo "$out" | grep -q '"request_id":"client-health"'
+          echo "$out" | grep -q '"status":"ready"'
