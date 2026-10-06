@@ -372,7 +372,7 @@ public sealed class HeadlessAiMirror : IDisposable
                 name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             if (p is null)
                 continue;
-            try { result[name] = Normalize(p.GetValue(session)); }
+            try { result[name] = p.GetValue(session)?.ToString(); }
             catch (Exception ex) { result[name] = "THREW: " + ex.GetBaseException().Message; }
         }
 
@@ -391,7 +391,7 @@ public sealed class HeadlessAiMirror : IDisposable
             if (value is System.Collections.IDictionary dict)
                 result[name] = new { type = value.GetType().FullName, count = dict.Count };
             else
-                result[name] = Normalize(value);
+                result[name] = value?.ToString();
         }
         return result;
     }
