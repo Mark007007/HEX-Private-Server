@@ -181,6 +181,42 @@ public sealed class HeadlessAiMirror : IDisposable
         }
     }
 
+    public static Dictionary<string, object?> DebugSessionContext(
+        Assembly assembly,
+        ulong sessionUid64,
+        string sessionName)
+    {
+        var uidType = RequiredType(assembly, "Game.Shared.UID");
+        var sessionStateType = RequiredType(assembly, "Game.Shared.SessionState");
+        var sessionEventType = RequiredType(assembly, "Game.Shared.SessionEventArgs");
+        var clientSessionBaseType = RequiredType(assembly, "Game.Shared.ClientSessionBase");
+        var transactionType = RequiredType(
+            assembly, "Game.Shared.Mechanics.Transactions.Transaction");
+        var playerType = RequiredType(assembly, "Game.Shared.Player");
+
+        var state = Activator.CreateInstance(sessionStateType)
+            ?? throw new InvalidOperationException("Cannot create SessionState");
+        SetMember(state, "SessionId", MakeUid(uidType, sessionUid64));
+        SetMember(state, "SessionName", sessionName);
+        SetMember(state, "MinimumPlayerCount", 2);
+        SetMember(state, "MaximumPlayerCount", 2);
+
+        var sink = new CaptureSink();
+        var mirrorType = BuildMirrorType(
+            clientSessionBaseType, sessionStateType, transactionType,
+            sessionEventType, playerType);
+        var ctor = mirrorType.GetConstructor(
+            new[] { sessionStateType, typeof(CaptureSink) })
+            ?? throw new InvalidOperationException("generated mirror constructor missing");
+        var mirror = ctor.Invoke(new object[] { state, sink });
+
+        var sessionType = RequiredType(assembly, "Game.Shared.Session");
+        var session = FindObjectOfType(mirror, sessionType)
+            ?? throw new InvalidOperationException("ClientSessionBase mirror contains no Game.Shared.Session");
+
+        return DescribeSession(session);
+    }
+
     public IReadOnlyList<object> Transactions => _sink.Transactions;
 
     public void ClearTransactions() => _sink.Clear();
@@ -277,6 +313,87 @@ public sealed class HeadlessAiMirror : IDisposable
             name, attrs, CallingConventions.Standard, returnType, args);
         body(method.GetILGenerator());
         builder.DefineMethodOverride(method, baseMethod);
+    }
+
+    private static Type RequiredType(Assembly asm, string fullName) =>
+        asm.GetType(fullName, true, false)
+        ?? throw new InvalidOperationException($"Missing client type: {fullName}");
+
+    private static object? FindObjectOfType(object root, Type target, int depth = 0)
+    {
+        if (root is null || depth > 5)
+            return null;
+        if (target.IsInstanceOfType(root))
+            return root;
+
+        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        return FindObjectOfType(root, target, visited, depth);
+    }
+
+    private static object? FindObjectOfType(
+        object root, Type target, HashSet<object> visited, int depth)
+    {
+        if (root is null || depth > 5)
+            return null;
+        if (!root.GetType().IsValueType && !visited.Add(root))
+            return null;
+        if (target.IsInstanceOfType(root))
+            return root;
+
+        var type = root.GetType();
+        foreach (var f in type.GetFields(
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+        {
+            if (f.IsStatic)
+                continue;
+            object? value;
+            try { value = f.GetValue(root); } catch { continue; }
+            if (value is null || value is string)
+                continue;
+            var found = FindObjectOfType(value, target, visited, depth + 1);
+            if (found is not null)
+                return found;
+        }
+
+        return null;
+    }
+
+    private static Dictionary<string, object?> DescribeSession(object session)
+    {
+        var result = new Dictionary<string, object?>
+        {
+            ["type"] = session.GetType().FullName
+        };
+        foreach (var name in new[] {
+            "ChessTimerLimit", "TimersEnabled", "TurnPhaseTimerLimit"
+        })
+        {
+            var p = session.GetType().GetProperty(
+                name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (p is null)
+                continue;
+            try { result[name] = Normalize(p.GetValue(session)); }
+            catch (Exception ex) { result[name] = "THREW: " + ex.GetBaseException().Message; }
+        }
+
+        foreach (var name in new[] {
+            "m_SessionStates", "m_TimersEnabled", "m_TurnPhaseTimerLimit",
+            "m_AIInactivityTimerLimit", "m_SessionId", "m_SessionName"
+        })
+        {
+            var f = session.GetType().GetField(
+                name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (f is null)
+                continue;
+            object? value;
+            try { value = f.GetValue(session); }
+            catch (Exception ex) { result[name] = "THREW: " + ex.GetBaseException().Message; continue; }
+            if (value is System.Collections.IDictionary dict)
+                result[name] = new { type = value.GetType().FullName, count = dict.Count };
+            else
+                result[name] = Normalize(value);
+        }
+        return result;
     }
 
     private static object InvalidUid(Type uidType) =>
