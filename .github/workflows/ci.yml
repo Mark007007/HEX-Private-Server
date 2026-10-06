@@ -231,6 +231,20 @@ jobs:
               ForEach-Object { "field $($_.Name) : $($_.FieldType.FullName)" }
           }
 
+      - name: Debug client Session context
+        shell: bash
+        env:
+          HEX_CLIENT_DLL: ${{ github.workspace }}/upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0/Assembly-CSharp-firstpass.dll
+        run: |
+          set -euo pipefail
+          out="$(
+            printf '%s\n' '{"protocol":1,"request_id":"session-debug","action":"debug-session","payload":{"session_uid64":900010,"session_name":"CI Session Debug"}}' |
+            dotnet legacy-ai-worker/bin/Release/net10.0/LegacyAiWorker.dll
+          )"
+          echo "$out"
+          echo "$out" | grep -q '"request_id":"session-debug"'
+          echo "$out" | grep -q '"ok":true'
+
       - name: Worker protocol smoke test
         shell: bash
         run: |
