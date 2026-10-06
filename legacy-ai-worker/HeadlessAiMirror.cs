@@ -129,6 +129,10 @@ public sealed class HeadlessAiMirror : IDisposable
         SetMember(state, "MinimumPlayerCount", 2);
         SetMember(state, "MaximumPlayerCount", 2);
 
+        stage = "construct SessionStateEncounterData";
+        var encounterData = CreateEncounterData(assembly, uidType);
+        SetOptionalMember(state, "EncounterData", encounterData);
+
         stage = "construct AI PlayerState";
         var aiState = Activator.CreateInstance(playerStateType)
             ?? throw new InvalidOperationException("Cannot create AI PlayerState");
@@ -200,6 +204,7 @@ public sealed class HeadlessAiMirror : IDisposable
         SetMember(state, "SessionName", sessionName);
         SetMember(state, "MinimumPlayerCount", 2);
         SetMember(state, "MaximumPlayerCount", 2);
+        SetOptionalMember(state, "EncounterData", CreateEncounterData(assembly, uidType));
 
         var sink = new CaptureSink();
         var mirrorType = BuildMirrorType(
@@ -697,6 +702,49 @@ public sealed class HeadlessAiMirror : IDisposable
         var p = type.GetProperty(name,
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         return p?.GetValue(null);
+    }
+
+    private static object CreateEncounterData(Assembly assembly, Type uidType)
+    {
+        var type = RequiredType(
+            assembly, "Game.Shared.SessionStateEncounterData");
+        var encounter = Activator.CreateInstance(type)
+            ?? throw new InvalidOperationException(
+                "Cannot create SessionStateEncounterData");
+
+        var flagsType = assembly.GetType(
+            "Game.Shared.ESessionFlags", throwOnError: false);
+        if (flagsType is not null)
+            SetOptionalMember(
+                encounter, "SessionFlags",
+                Enum.ToObject(flagsType, 128)); // ESessionFlags.IsPvEArena
+
+        SetOptionalMember(encounter, "ArenaInstance", 0UL);
+        SetOptionalMember(encounter, "ArenaOwner", 0UL);
+        SetOptionalMember(encounter, "FirstPlayer", InvalidUid(uidType));
+
+        var winnersType = typeof(List<>).MakeGenericType(typeof(ulong));
+        SetOptionalMember(encounter, "MatchPreviousWinners",
+            Activator.CreateInstance(winnersType));
+
+        return encounter;
+    }
+
+    private static void SetOptionalMember(object target, string name, object? value)
+    {
+        var t = target.GetType();
+        var p = t.GetProperty(
+            name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (p is not null && p.CanWrite)
+        {
+            p.SetValue(target, ConvertValue(value, p.PropertyType));
+            return;
+        }
+
+        var f = t.GetField(
+            name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        if (f is not null)
+            f.SetValue(target, ConvertValue(value, f.FieldType));
     }
 
     private static void SetMember(object target, string name, object? value)
