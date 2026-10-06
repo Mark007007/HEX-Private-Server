@@ -64,14 +64,14 @@ def _event_envelopes_from_game(game, viewer_uid) -> list[dict[str, Any]]:
 def _collect_live_events(session, port, ai_player_id) -> list[dict[str, Any]]:
     """Keep a lossless in-process event history for the headless client mirror."""
     history = getattr(session, "_hex_original_ai_event_history", None)
-    seen_games = getattr(session, "_hex_original_ai_seen_games", None)
+    event_cursors = getattr(session, "_hex_original_ai_event_cursors", None)
     sequence = getattr(session, "_hex_original_ai_event_sequence", 0)
     if history is None:
         history = []
         setattr(session, "_hex_original_ai_event_history", history)
-    if seen_games is None:
-        seen_games = set()
-        setattr(session, "_hex_original_ai_seen_games", seen_games)
+    if event_cursors is None:
+        event_cursors = {}
+        setattr(session, "_hex_original_ai_event_cursors", event_cursors)
 
     sink = getattr(port, "event_sink", None) if port is not None else None
     games = list(getattr(sink, "_unpublished", ()) or ())
@@ -84,19 +84,28 @@ def _collect_live_events(session, port, ai_player_id) -> list[dict[str, Any]]:
         events = list(getattr(game, "events", ()) or ())
         if not events:
             continue
-        game_marker = id(game)
-        if game_marker in seen_games:
-            continue
-        seen_games.add(game_marker)
 
-        # Project the whole Game once. Game.make_network_packet applies the
-        # same visibility filtering the real client uses, so the C# mirror sees
-        # the AI's legal view rather than the human player's hidden-card view.
-        projected = _event_envelopes_from_game(game, ai_uid)
+        game_marker = id(game)
+        start = int(event_cursors.get(game_marker, 0))
+        # If an event buffer was replaced or truncated, restart from its
+        # beginning rather than silently dropping the new stream.
+        if start > len(events):
+            start = 0
+        if start == len(events):
+            continue
+
+        pending = events[start:]
+        clone = copy.copy(game)
+        clone.events = copy.deepcopy(pending)
+        projected = _event_envelopes_from_game(clone, ai_uid)
         for item in projected:
             sequence += 1
             item["sequence"] = sequence
             history.append(item)
+
+        # Advance only after successful projection so a transient packet-build
+        # failure can be retried on the next decision request.
+        event_cursors[game_marker] = len(events)
 
     # Persisted event logs are useful for reattached/PvP sessions. They are
     # loaded once and then combined with live PVE/Arena events.
