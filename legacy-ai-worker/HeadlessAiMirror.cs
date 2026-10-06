@@ -321,9 +321,32 @@ public sealed class HeadlessAiMirror : IDisposable
     }
 }
 
-public sealed class OriginalAiRuntime
+public sealed class OriginalAiRuntime : IDisposable
 {
+    private sealed class SessionMirror : IDisposable
+    {
+        public HeadlessAiMirror Mirror { get; }
+        public HashSet<string> AppliedEvents { get; } = new(StringComparer.Ordinal);
+
+        public SessionMirror(
+            Assembly assembly,
+            ulong sessionUid64,
+            ulong aiUid64,
+            ulong humanUid64,
+            int aiPosition,
+            string sessionName)
+        {
+            Mirror = HeadlessAiMirror.Create(
+                assembly, sessionUid64, aiUid64, humanUid64,
+                aiPosition, sessionName);
+        }
+
+        public void Dispose() => Mirror.Dispose();
+    }
+
     private readonly Assembly _assembly;
+    private readonly Dictionary<string, SessionMirror> _sessions = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
 
     public OriginalAiRuntime(string clientDll)
     {
@@ -347,6 +370,7 @@ public sealed class OriginalAiRuntime
             ai_types = ai && tactical,
             client_session = session,
             session_events = events,
+            active_sessions = _sessions.Count,
             assembly = _assembly.FullName
         };
     }
@@ -355,96 +379,57 @@ public sealed class OriginalAiRuntime
         ulong sessionUid64, ulong aiUid64, ulong humanUid64,
         int aiPosition, string sessionName, IEnumerable<EventEnvelope> events)
     {
-        using var mirror = HeadlessAiMirror.Create(
-            _assembly, sessionUid64, aiUid64, humanUid64,
-            aiPosition, sessionName);
-
-        var built = new List<(EventEnvelope Envelope, object Event)>();
-        foreach (var item in events)
+        lock (_gate)
         {
-            var bytes = Convert.FromBase64String(item.DataBase64);
-            var ev = _assembly.GetType("Game.Shared.SessionEventArgs")!
-                .GetMethod("BuildArgs",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
-                    binder: null, types: new[] { typeof(int), typeof(byte[]) },
-                    modifiers: null)!
-                .Invoke(null, new object[] { item.ClassId, bytes });
-            if (ev is not null)
-                built.Add((item, ev));
-        }
-
-        var lastDecision = built
-            .Select((x, i) => (x, i))
-            .Where(x => IsDecisionForAi(x.x.Event, aiUid64))
-            .Select(x => x.i)
-            .DefaultIfEmpty(-1)
-            .Max();
-
-        for (var i = 0; i < built.Count; i++)
-        {
-            // Replay all history, but suppress earlier AI decision triggers.
-            if (lastDecision >= 0 && i != lastDecision &&
-                IsDecisionForAi(built[i].Event, aiUid64))
-                continue;
-
-            mirror.Route(
-                built[i].Envelope.ClassId,
-                Convert.FromBase64String(built[i].Envelope.DataBase64));
-        }
-
-        var tx = mirror.Transactions.LastOrDefault()
-            ?? throw new InvalidOperationException(
-                "Original Game.Shared.AI produced no transaction");
-        return TransactionProjector.Project(tx);
-    }
-
-    private static bool IsDecisionForAi(object ev, ulong aiUid64)
-    {
-        var n = ev.GetType().Name;
-        if (n is not ("GreenLightSessionEventArgs" or
-                      "AbilityActivationDataRequiredSessionEventArgs" or
-                      "TriggeredAbilityActivationDataRequiredSessionEventArgs" or
-                      "CombatsThatNeedDamageSessionEventArgs"))
-            return false;
-
-        foreach (var field in new[] { "PlayerId", "m_PlayerId", "RoutingPlayerId" })
-        {
-            var v = Member(ev, field);
-            var u = Uid64(v);
-            if (u.HasValue) return u.Value == aiUid64;
-        }
-        return n == "GreenLightSessionEventArgs";
-    }
-
-    private static object? Member(object? root, string name)
-    {
-        if (root is null) return null;
-        var t = root.GetType();
-        var p = t.GetProperty(name,
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (p is not null) return p.GetValue(root);
-        var f = t.GetField(name,
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        return f?.GetValue(root);
-    }
-
-    private static ulong? Uid64(object? value)
-    {
-        if (value is null) return null;
-        if (value is ulong u) return u;
-        if (value is long l) return unchecked((ulong)l);
-        if (value is int i) return unchecked((ulong)i);
-
-        foreach (var n in new[] { "uid64", "m_UID64", "UID64", "value", "Value" })
-        {
-            var nested = Member(value, n);
-            if (nested is not null)
+            var key = $"{sessionUid64}:{aiUid64}";
+            if (!_sessions.TryGetValue(key, out var session))
             {
-                var r = Uid64(nested);
-                if (r.HasValue) return r;
+                session = new SessionMirror(
+                    _assembly, sessionUid64, aiUid64, humanUid64,
+                    aiPosition, sessionName);
+                _sessions[key] = session;
             }
+
+            foreach (var item in events.OrderBy(e => e.Sequence))
+            {
+                var marker = $"{item.Sequence}:{item.ClassId}:{item.DataBase64}";
+                if (!session.AppliedEvents.Add(marker))
+                    continue;
+
+                var bytes = Convert.FromBase64String(item.DataBase64);
+                session.Mirror.Route(item.ClassId, bytes);
+            }
+
+            var tx = session.Mirror.Transactions.LastOrDefault();
+            session.Mirror.ClearTransactions();
+            if (tx is null)
+            {
+                throw new InvalidOperationException(
+                    "Original Game.Shared.AI produced no transaction");
+            }
+
+            return TransactionProjector.Project(tx);
         }
-        return null;
+    }
+
+    public void ResetSession(ulong sessionUid64, ulong aiUid64)
+    {
+        lock (_gate)
+        {
+            var key = $"{sessionUid64}:{aiUid64}";
+            if (_sessions.Remove(key, out var session))
+                session.Dispose();
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            foreach (var session in _sessions.Values)
+                session.Dispose();
+            _sessions.Clear();
+        }
     }
 }
 
