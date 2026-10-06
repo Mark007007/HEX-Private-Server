@@ -1,0 +1,44 @@
+name: HEX Private Server CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Apply integration
+        run: bash scripts/apply_integration.sh
+
+      - name: Python integration tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Syntax check
+        run: python -m py_compile $(find integration hex-server -name '*.py' -print)
+
+      - name: Server tests
+        working-directory: hex-server
+        run: python -m unittest tests.tests_encoding tests.tests_commands tests.tests_arena -v
+
+  original-ai-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build Original AI worker
+        run: dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release

@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.user
+*.suo
+bin/
+obj/
+local-env.cmd
+*.dll
+*.pdb
+*.db
+*.sqlite
+*.log
