@@ -37,14 +37,15 @@ fi
 
 # The pinned upstream restart.sh contains the original developer absolute checkout path.
 # Replace it with the current submodule directory so the project is portable.
-python3 - "$HEX/restart.sh" <<PY
+python3 - "$HEX/restart.sh" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
 text = path.read_text()
-old = "BASE_DIR=\"/home/ianutley/Hex\""
-new = "BASE_DIR=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\""
+old = 'BASE_DIR="/home/ianutley/Hex"'
+dollar = chr(36)
+new = 'BASE_DIR="' + dollar + '(cd -- "' + dollar + '(dirname -- "' + dollar + '{BASH_SOURCE[0]}")" && pwd -P)"'
 if old in text:
     path.write_text(text.replace(old, new, 1))
 PY
