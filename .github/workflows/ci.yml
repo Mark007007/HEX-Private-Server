@@ -47,9 +47,21 @@ jobs:
         run: |
           set -euo pipefail
           required_records=(
-            Records/CardTemplate.jsonl
+            Records/AbilityEffectConditionTemplate.jsonl
+            Records/AbilityEffectTemplate.jsonl
+            Records/AbilityTargetTemplate.jsonl
             Records/AbilityTemplate.jsonl
+            Records/CardCounterTemplate.jsonl
+            Records/CardTemplate.jsonl
+            Records/ChampionClassData.jsonl
+            Records/ChampionTalentData.jsonl
+            Records/ChampionTemplate.jsonl
+            Records/ConversationTemplate.jsonl
+            Records/DeckTemplate.jsonl
             Records/EncounterDeck.jsonl
+            Records/InventoryItemData.jsonl
+            Records/QuestTemplate.jsonl
+            Records/SceneData.jsonl
           )
           missing=0
           for path in "${required_records[@]}"; do
@@ -117,10 +129,33 @@ jobs:
       - name: Server regression tests
         working-directory: hex-server
         run: |
-          if [[ -f Records/CardTemplate.jsonl && -f Records/AbilityTemplate.jsonl && -f Records/EncounterDeck.jsonl ]]; then
+          required_records=(
+            Records/AbilityEffectConditionTemplate.jsonl
+            Records/AbilityEffectTemplate.jsonl
+            Records/AbilityTargetTemplate.jsonl
+            Records/AbilityTemplate.jsonl
+            Records/CardCounterTemplate.jsonl
+            Records/CardTemplate.jsonl
+            Records/ChampionClassData.jsonl
+            Records/ChampionTalentData.jsonl
+            Records/ChampionTemplate.jsonl
+            Records/ConversationTemplate.jsonl
+            Records/DeckTemplate.jsonl
+            Records/EncounterDeck.jsonl
+            Records/InventoryItemData.jsonl
+            Records/QuestTemplate.jsonl
+            Records/SceneData.jsonl
+          )
+          missing=0
+          for path in "${required_records[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              missing=1
+            fi
+          done
+          if [[ "$missing" -eq 0 ]]; then
             python -m unittest tests.tests_encoding tests.tests_commands tests.tests_arena -v
           else
-            echo "::notice::Skipping upstream server regression tests because the public upstream tree does not include the client-derived Records/*.jsonl snapshot."
+            echo "::notice::Skipping upstream server regression tests because the public upstream tree does not include the complete client-derived Records/*.jsonl snapshot."
           fi
 
   dingler-reference:
