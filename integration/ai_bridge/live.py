@@ -45,6 +45,29 @@ def _adapter_for(handler) -> OriginalAiAdapter:
     return current
 
 
+def _record_original_ai_progress(handler, signature: str, phase_key: str) -> bool:
+    """Return True when the same AI intent repeats three times in one phase."""
+    previous_phase = getattr(handler, "_hex_original_ai_signature_phase", None)
+    previous_signature = getattr(handler, "_hex_original_ai_signature", None)
+    repeats = getattr(handler, "_hex_original_ai_signature_repeats", 0)
+
+    if phase_key != previous_phase or signature != previous_signature:
+        repeats = 0
+    else:
+        repeats += 1
+
+    handler._hex_original_ai_signature_phase = phase_key
+    handler._hex_original_ai_signature = signature
+    handler._hex_original_ai_signature_repeats = repeats
+    return repeats >= 2
+
+
+def _reset_original_ai_progress(handler) -> None:
+    handler._hex_original_ai_signature_phase = None
+    handler._hex_original_ai_signature = None
+    handler._hex_original_ai_signature_repeats = 0
+
+
 def try_native_original_ai(
     handler, session, native_ai_id, human_id, battle_state, port
 ) -> bool:
@@ -72,18 +95,35 @@ def try_native_original_ai(
             {"kind": decision.kind, "payload": decision.payload},
             sort_keys=True, separators=(",", ":"),
         )
+        phase_key = str(snapshot.get("phase_key", "") or "")
+        if _record_original_ai_progress(handler, signature, phase_key):
+            # Match Dingler's repeated-move guard: a third identical intent in
+            # one phase is treated as an unhealthy AI loop and falls back to
+            # the existing Python AI instead of feeding the same transaction
+            # back into RulesPort again.
+            try:
+                adapter.client.restart()
+            except Exception:
+                pass
+            _reset_original_ai_progress(handler)
+            return False
+
         if not submit_ai_decision(port, native_ai_id, decision, snapshot):
             # A rejected original transaction means its mirror is no longer
             # authoritative. Restart the worker so the next attempt rebuilds
             # its client-side session from the Python event history.
-            adapter.client.restart()
+            try:
+                adapter.client.restart()
+            finally:
+                _reset_original_ai_progress(handler)
             return False
         handler._hex_original_ai_last_signature = signature
-        handler._hex_original_ai_last_phase = snapshot.get("phase_key")
+        handler._hex_original_ai_last_phase = phase_key
         return True
     except (AiBridgeError, TimeoutError, OSError, ValueError, RuntimeError):
         try:
             adapter.client.restart()
         except Exception:
             pass
+        _reset_original_ai_progress(handler)
         return False
