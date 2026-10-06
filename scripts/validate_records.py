@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 
 
+RECORDS_HEADER = "# HEX-PRIVATE-SERVER Records v1"
+
 REQUIRED_SECTIONS = (
     "AbilityEffectConditionTemplate",
     "AbilityEffectTemplate",
@@ -46,9 +48,9 @@ def validate_records(root: str | Path) -> tuple[list[str], dict[str, int]]:
         try:
             with record_path.open("r", encoding="utf-8", errors="strict") as handle:
                 lines = handle.readlines()
-            if not lines or lines[0].rstrip("\n") != "# HEX-PRIVATE-SERVER Records v1":
+            if not lines or lines[0].rstrip("\r\n") != RECORDS_HEADER:
                 errors.append(
-                    f"{record_path.name}: missing required first-line header {header!r}"
+                    f"{record_path.name}: missing required first-line header {RECORDS_HEADER!r}"
                 )
             for lineno, line in enumerate(lines[1:], 2):
                 if not line.strip():
