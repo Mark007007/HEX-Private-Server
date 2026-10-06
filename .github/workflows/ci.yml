@@ -166,6 +166,26 @@ jobs:
             Write-Host "found: $dll ($size bytes)"
           }
 
+      - name: Stage HEX client DLLs into Dingler runtime layout
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE ".github/workflows"
+          $runtime = Join-Path $env:GITHUB_WORKSPACE "upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0"
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          $required = @(
+            "Assembly-CSharp-firstpass.dll",
+            "ICSharpCode.SharpZipLib.dll",
+            "NCalc.dll",
+            "SampleClassLibrary.dll",
+            "System.EnterpriseServices.dll",
+            "System.Web.Services.dll",
+            "UnityEngine.dll"
+          )
+          foreach ($dll in $required) {
+            Copy-Item -LiteralPath (Join-Path $source $dll) -Destination (Join-Path $runtime $dll) -Force
+          }
+          Get-ChildItem -LiteralPath $runtime -Filter *.dll | Select-Object Name,Length
+
       - name: Inspect HEX client AI type surface
         shell: pwsh
         env:
@@ -187,26 +207,6 @@ jobs:
           $matches | ForEach-Object { $_.FullName }
           "assembly_location=$($asm.Location)"
           "assembly_full_name=$($asm.FullName)"
-
-      - name: Stage HEX client DLLs into Dingler runtime layout
-        shell: pwsh
-        run: |
-          $source = Join-Path $env:GITHUB_WORKSPACE ".github/workflows"
-          $runtime = Join-Path $env:GITHUB_WORKSPACE "upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0"
-          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
-          $required = @(
-            "Assembly-CSharp-firstpass.dll",
-            "ICSharpCode.SharpZipLib.dll",
-            "NCalc.dll",
-            "SampleClassLibrary.dll",
-            "System.EnterpriseServices.dll",
-            "System.Web.Services.dll",
-            "UnityEngine.dll"
-          )
-          foreach ($dll in $required) {
-            Copy-Item -LiteralPath (Join-Path $source $dll) -Destination (Join-Path $runtime $dll) -Force
-          }
-          Get-ChildItem -LiteralPath $runtime -Filter *.dll | Select-Object Name,Length
 
       - name: Worker protocol smoke test
         shell: bash
