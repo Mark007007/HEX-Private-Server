@@ -46,6 +46,85 @@ jobs:
             echo "::notice::Skipping upstream server regression tests because the public upstream tree does not include the client-derived Records/*.jsonl snapshot."
           fi
 
+  dingler-reference:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout integration project
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Stage HEX client DLLs into Dingler documented paths
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE ".github/workflows"
+          $dingler = Join-Path $env:GITHUB_WORKSPACE "upstream/Dingler-FrostRingArena"
+          $compileDir = Join-Path $dingler "DLLs"
+          $runtimeDir = Join-Path $dingler "Dingler.Terminal/bin/Release/net10.0"
+
+          New-Item -ItemType Directory -Force -Path $compileDir, $runtimeDir | Out-Null
+
+          $compileDlls = @(
+            "Assembly-CSharp-firstpass.dll",
+            "NCalc.dll",
+            "ICSharpCode.SharpZipLib.dll"
+          )
+          $allDlls = @(
+            "Assembly-CSharp-firstpass.dll",
+            "ICSharpCode.SharpZipLib.dll",
+            "NCalc.dll",
+            "SampleClassLibrary.dll",
+            "System.EnterpriseServices.dll",
+            "System.Web.Services.dll",
+            "UnityEngine.dll"
+          )
+
+          foreach ($dll in $compileDlls) {
+            Copy-Item -LiteralPath (Join-Path $source $dll) -Destination (Join-Path $compileDir $dll) -Force
+          }
+          foreach ($dll in $allDlls) {
+            Copy-Item -LiteralPath (Join-Path $source $dll) -Destination (Join-Path $runtimeDir $dll) -Force
+          }
+
+          Write-Host "Dingler compile DLLs: $compileDir"
+          Get-ChildItem -LiteralPath $compileDir -Filter *.dll | Select-Object Name,Length
+          Write-Host "Dingler runtime DLLs: $runtimeDir"
+          Get-ChildItem -LiteralPath $runtimeDir -Filter *.dll | Select-Object Name,Length
+
+      - name: Build upstream Dingler reference
+        working-directory: upstream/Dingler-FrostRingArena
+        run: dotnet build Dingler.slnx -c Release --nologo
+
+      - name: Verify Dingler release directory
+        shell: pwsh
+        run: |
+          $runtimeDir = Join-Path $env:GITHUB_WORKSPACE "upstream/Dingler-FrostRingArena/Dingler.Terminal/bin/Release/net10.0"
+          if (-not (Test-Path (Join-Path $runtimeDir "Dingler.Terminal.dll"))) {
+            throw "Dingler.Terminal.dll was not produced"
+          }
+          $required = @(
+            "Assembly-CSharp-firstpass.dll",
+            "ICSharpCode.SharpZipLib.dll",
+            "NCalc.dll",
+            "SampleClassLibrary.dll",
+            "System.EnterpriseServices.dll",
+            "System.Web.Services.dll",
+            "UnityEngine.dll"
+          )
+          foreach ($dll in $required) {
+            $path = Join-Path $runtimeDir $dll
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing runtime DLL in Dingler release directory: $path"
+            }
+          }
+          Get-ChildItem -LiteralPath $runtimeDir -Filter *.dll |
+            Select-Object Name,Length
+
   original-ai-worker:
     runs-on: windows-latest
     steps:
