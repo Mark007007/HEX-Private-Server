@@ -18566,7 +18566,8 @@ class HCPHandler(ProfileStreamMixin):
                 err_inner = encode_objfmt_response(
                     ["Game.Client.Network.Profile.AddNewDeckResponse",
                      "Game.Shared.Network.Profile.EAddNewDeckError", "System.String"],
-                    [("Error", "enum", "Game.Shared.Network.Profile.EAddNewDeckError", 1),
+                    [("Error", "enum1",
+                      ("Game.Shared.Network.Profile.EAddNewDeckError", 1)),
                      ("ErrorMessage", "string", "Not authenticated")]
                 )
                 err_body = compress_gzip(err_inner) if comp else err_inner
@@ -19029,6 +19030,89 @@ class HCPHandler(ProfileStreamMixin):
                 "reqid": resp_reqid, "c": comp, "conh": conh, "sid": self.sid}, dw_bytes)
             log_req(f"    Sent GetDeckInfo response ({len(dw_bytes)}b)")
 
+        # RemoveDeck (2093) — the deck editor's "delete deck" action.
+        #
+        # The client sends ProfileService.RemoveDeck and only removes the deck
+        # from its own list when ``response.IsOk`` (Assembly-CSharp
+        # UIDeckEditorViewModel.DeleteDeck).  Without a branch here the server
+        # logged "Unhandled DataType=2093" and answered nothing at all, so the
+        # callback never ran and the deck stayed in the list.
+        elif data_type == 2093:
+            log_req(">>> RemoveDeck (dt=2093)")
+            # Same UID layout GetDeckInfo parses: (deck_db_id << 8) | 17.
+            deck_uid64 = 0
+            if isinstance(inner_bytes, bytes) and b"DeckID" in inner_bytes:
+                rest = inner_bytes[inner_bytes.find(b"DeckID"):]
+                uid_pos = rest.find(b"m_UID64")
+                if uid_pos >= 0:
+                    parts = rest[uid_pos:].split(b";", 5)
+                    if len(parts) >= 5:
+                        try:
+                            deck_uid64 = struct.unpack(
+                                "<Q", unhexlify(parts[4]))[0]
+                        except Exception:
+                            pass
+            deck_db_id = deck_uid64 >> 8 if deck_uid64 else 0
+            log_req(f"    deck_id={deck_db_id}")
+
+            removed = False
+            if self.user_profile and deck_db_id > 0:
+                owner = self.user_profile["id"]
+                row = _db.execute(
+                    "SELECT id FROM decks WHERE id=? AND user_id=?",
+                    (deck_db_id, owner)).fetchone()
+                if row:
+                    _db.execute(
+                        "DELETE FROM decks WHERE id=? AND user_id=?",
+                        (deck_db_id, owner))
+                    # Nothing declares a foreign key to decks, so the rows that
+                    # merely point at one have to be cleared by hand or the
+                    # champion and the Arena run would keep referring to a deck
+                    # that no longer exists.
+                    _db.execute(
+                        "UPDATE champions SET last_deck_id=0 "
+                        "WHERE user_id=? AND last_deck_id=?",
+                        (owner, deck_db_id))
+                    _db.execute(
+                        "UPDATE arena_state SET deck_id=0 "
+                        "WHERE user_id=? AND deck_id=?",
+                        (owner, deck_db_id))
+                    # Deck ids are globally unique, so no owner filter is needed
+                    # (and this table keys players by ``player_uid``, not by the
+                    # users.id the rest of the handler works with).
+                    _db.execute(
+                        "UPDATE tournament_signups SET deck_id=0, deck_ready=0 "
+                        "WHERE deck_id=?", (deck_db_id,))
+                    _db.commit()
+                    removed = True
+                    log_req(f"    Deleted deck {deck_db_id} for owner {owner}")
+                else:
+                    log_req(f"    deck {deck_db_id} not owned by this profile")
+
+            # RemoveDeckResponse: Error(enum) + ErrorMessage + DeckID(UID) +
+            # succeded(bool).  ``IsOk`` is what gates the client's local
+            # removal, so a failure must report an error rather than nothing.
+            err_val = 0 if removed else 1
+            err_msg = "" if removed else "Deck not found"
+            resp_inner = encode_objfmt_response(
+                ["Game.Client.Network.Profile.RemoveDeckResponse",
+                 "Game.Shared.Network.Profile.ERemoveDeckError",
+                 "System.String", "Game.Shared.UID", "System.Boolean"],
+                [("Error", "enum1",
+                  ("Game.Shared.Network.Profile.ERemoveDeckError", err_val)),
+                 ("ErrorMessage", "string", err_msg),
+                 ("DeckID", "uid", deck_uid64),
+                 ("succeded", "bool", removed)]
+            )
+            resp_body = compress_gzip(resp_inner) if comp else resp_inner
+            resp_reqid = reqid | 1
+            dw_bytes = encode_datawrapper(resp_reqid, data_type, resp_body, comp, session_id)
+            issuer_str = f"0.0.0.0.ServiceProfile.{SERVICE_PROFILE_UID}.ServicePlayer.{self.client_uid}.{resp_reqid}"
+            self.scnt += 1
+            self.send({"issuer": issuer_str, "target": target, "instance": instance,
+                "reqid": resp_reqid, "c": comp, "conh": conh, "sid": self.sid}, dw_bytes)
+            log_req(f"    Sent RemoveDeck response (removed={removed}, {len(dw_bytes)}b)")
+
         # GetPlayerCardIDList (2043)
         elif data_type == 2043:
             log_req(f">>> GetPlayerCardIDList (dt=2043)")
@@ -19474,9 +19558,34 @@ class HCPHandler(ProfileStreamMixin):
 
                     # Every newly created champion needs its own starter deck,
                     # even when this user already received the race's cards.
+                    #
+                    # decks.cards must hold card INSTANCE ids.  The encoded-deck
+                    # path resolves each entry with
+                    # db_card_instance_for_encoded_deck, and a template guid in
+                    # that column resolves to nothing, so the whole deck renders
+                    # empty in the client with no error anywhere.  Resolve the
+                    # race's templates against what this player owns; when the
+                    # race grant above was skipped, the instances already exist
+                    # from the earlier grant.
                     cards_list = []
+                    used_instances: dict[str, int] = {}
                     for card_guid, count in deck["cards"]:
-                        cards_list.extend([card_guid] * count)
+                        owned = [
+                            int(r[0]) for r in _db.execute(
+                                "SELECT instance_id FROM card_instances "
+                                "WHERE user_id=? AND template_guid=? "
+                                "ORDER BY instance_id",
+                                (self.user_profile["id"], card_guid))
+                        ]
+                        offset = used_instances.get(card_guid, 0)
+                        taken = owned[offset:offset + count]
+                        used_instances[card_guid] = offset + len(taken)
+                        cards_list.extend(taken)
+                        if len(taken) < count:
+                            log_req(
+                                f"    WARN: starter deck wants {count}x "
+                                f"{card_guid} but only {len(taken)} instance(s) "
+                                f"are owned; deck will be short")
                     cards_json = json.dumps(cards_list)
                     deck_db_id = db_save_deck(
                         self.user_profile["id"],

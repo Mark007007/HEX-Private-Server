@@ -23,6 +23,13 @@ for name in hconnect_server.py deck_inbox.py static.py db.py profile_db.py \
   cp "$ROOT/overlay/hex-server/$name" "$HEX/$name"
 done
 
+# Files that keep their subdirectory.  populate_fra_encounters.py is a one-off
+# setup tool rather than runtime code, but a fresh clone has to run it to
+# populate fra_encounters, and the pinned upstream copy cannot read the Records
+# header this project writes.
+mkdir -p "$HEX/AssetExtraction"
+cp "$ROOT/overlay/hex-server/AssetExtraction/"*.py "$HEX/AssetExtraction/"
+
 
 DINGLER="$ROOT/upstream/Dingler-FrostRingArena"
 CLIENT_RUNTIME="$ROOT/client-runtime"

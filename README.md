@@ -312,15 +312,32 @@ dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
 # 5. 建库：从自己的客户端提取 Records（唯一的外部数据依赖）
 HEX_GAMEDATA="<客户端>/Data/gamedata" bash scripts/prepare_client_records.sh
 
-# 6. 创建 local-env.sh —— 未跟踪，必须手工创建（内容见上节）
+# 6. 填充冰霜竞技场遭遇表（不跑则进 FRA 报 "No FRA encounter is eligible"）
+cd hex-server && python3 AssetExtraction/populate_fra_encounters.py --apply && cd ..
+
+# 7. 创建 local-env.sh —— 未跟踪，必须手工创建（内容见上节）
 #    HEX_CLIENT_DIR / HEX_CODEX_DATA / HEX_DECK_USER / HEX_DECK_WATCH=1
 
-# 7. 开服（服务器 + 剪贴板助手 + 游戏）
+# 8. 开服（服务器 + 剪贴板助手 + 游戏）
 start-game.bat
 ```
 
-Hex Codex 目录数据（`build/codex-data`）**已随仓库提交**，因此第 6 步之后即可直接导入
+Hex Codex 目录数据（`build/codex-data`）**已随仓库提交**，因此第 7 步之后即可直接导入
 分享链接，**不需要联网、不需要额外生成步骤**。
+
+### 初始卡组曾经存成模板 GUID（已修）
+
+创建英雄时自动生成的初始卡组，原本把**模板 GUID** 写进 `decks.cards`：
+
+```python
+cards_list.extend([card_guid] * count)     # card_guid 是模板 GUID，不是实例 id
+```
+
+而 `decks.cards` 必须存**实例 id** —— 编码时每个条目都要经
+`db_card_instance_for_encoded_deck` 解析，模板 GUID 解析不出任何东西，
+于是**整副牌在客户端显示为空，且任何地方都不报错**。
+已改为按玩家实际拥有的实例解析（并优先复用已发放的实例），
+存量的这类卡组需要按同名兜底重解析一次。
 
 ### 已验证 / 未验证
 
@@ -367,6 +384,115 @@ python scripts/validate_deck_import.py
 `HEX_DB_PATH` 指向副本，跑完删除；`HEX_DECK_INBOX` 同样重定向到临时目录。
 退出码 `0` = 全部通过，`1` = 有失败项（CI 可用）。
 
+## 🎁 测试账号：刷入全卡全装备
+
+```bash
+python scripts/grant_full_collection.py --dry-run   # 先看规模
+python scripts/grant_full_collection.py             # 写入
+```
+
+给一个账号补齐**全部可收集卡牌**与**全部装备**，方便随时组任何牌。默认：
+
+| 项 | 默认 | 说明 |
+|---|---|---|
+| 每张卡的份数 | **4** | 卡组上限 |
+| 每件装备的份数 | **1** | 每个槽位只能装一件 |
+| 卡牌范围 | 全部可收集模板 | `card_type IN ('Bane','Mod')` 是战役灾祸/Arena 咒文，**不是收藏品**，已排除 |
+| 装备来源 | `Records/InventoryItemData.jsonl` | 取客户端的 `InventoryEquipmentData`，GUID 与客户端一一对应 |
+
+两个写入位置都按服务端自己的写法来，不存在客户端不认的旁路：
+
+- 卡牌同时写 `collections`（模板+数量，`GetPlayerCardIDList` 读这个）
+  和 `card_instances`（每张实体卡一行，**登录时客户端收藏夹就是从这来的**）
+- 装备写 `player_inventory`，`client_item_uid` 即客户端去重用的 `Id`
+
+**幂等**：只补齐不足的份数，已有卡片一张不动；重复执行不改任何东西。
+需要调整时加参数重跑即可（`--cards 4`、`--equipment 4`、`--pvp-legal-only`）。
+
+> ⚠️ 先停服务器再执行 —— 脚本直接写库。
+> 执行前会提示先备份；登录时收藏随 profile stream 一起下发，无需二次重登。
+
+### 已知的既有数据问题（与刷入无关）
+
+`collections.quantity` 与 `card_instances` 行数理论上一一对应，但两者由不同函数写入，
+而实例插入是 `INSERT OR IGNORE`：**重复发放时数量增加、重复的实例行被丢弃**，于是产生漂移
+（客户端收藏夹按实例渲染，卡组上限却按 `collections` 算，可能出现「允许放 4 张但只有 3 张实物」）。
+脚本内置了**对账修复**，会把这种漂移补回一致，并在输出里报告条数。
+
+### 收藏界面卡顿：为什么该砍印次而不是份数
+
+反编译客户端（`Assembly-CSharp` 202666）确认组牌界面的列表**按卡牌一行，不按份数**：
+
+```csharp
+public override void Add(CardTemplate template, ulong id)
+{
+    if (!m_Table.ContainsKey(template.m_Id)) { ...m_Data.Add(cardEntry); }  // 新卡牌 = 一行
+    else { m_Table[template.m_Id].AddInstanceId(id); }                      // 多份只追加 id
+}
+```
+
+成本有两个动因：
+
+| 动因 | 影响 | 现状 |
+|---|---|---|
+| **卡牌种类数**（模板数） | UI 行数；每次改筛选/排序都全量重扫 | 7,207 |
+| **实例总数** | 构建列表时那一遍全量遍历（单帧内，不 yield） | 29,339 |
+
+客户端**有**窗口虚拟化（只渲染 14 行），但**没有**懒加载，也没有任何「大收藏」特殊分支。
+所以唯一的服务端杠杆是减少数据量，而**砍印次能同时降两个动因，砍份数只能降第二个**：
+
+```bash
+python scripts/grant_full_collection.py --collapse-printings --dry-run
+```
+
+该模式每个卡名只保留一个印次（优先 PvP 可用），**每个印次仍是 4 份**，因此
+每种牌照样能放满 4 张；被卡组引用的实例一律保留。
+
+| | 之前 | 折叠后 |
+|---|---|---|
+| 模板（UI 行数） | 7,207 | **3,797**（-47%） |
+| 卡实例（加载遍历） | 29,339 | **15,452**（-47%） |
+| 登录推送分块 | 59 块 | **31 块** |
+| 唯一卡名覆盖 | 3,789 | 3,789（100%） |
+
+**可逆**：重跑不带 `--collapse-printings` 即恢复全部印次 × 4。
+
+### 冰霜竞技场（FRA）需要先填充遭遇表
+
+`fra_encounters` 为空时，进 FRA 会报 `No FRA encounter is eligible for rank 1`。
+填充工具是 `AssetExtraction/populate_fra_encounters.py`：
+
+```bash
+cd hex-server
+python3 AssetExtraction/populate_fra_encounters.py --apply
+```
+
+> 该工具原本**第 1 行就崩** —— 它没跳过 `prepare_client_records.sh` 写进去的
+> `# HEX-PRIVATE-SERVER Records v1` 头部注释。已修复：跳过 `#` 注释行，
+> 但仍对真正损坏的记录报错（静默返回空表会让问题延迟到「无法开局」才暴露）。
+
+### 删除套牌原本静默失效（已修）
+
+卡组编辑器里的「删除套牌」发的是 `ProfileService.RemoveDeck`，**dt=2093**。
+服务端没有这个分支，日志只留下 `Unhandled DataType=2093` 且**不回任何响应** ——
+客户端的回调（`UIDeckEditorViewModel.DeleteDeck`）永远不触发，所以列表里删不掉。
+
+已实现该分支，并在删除后清理三类**没有外键声明**的悬空引用：
+
+| 引用 | 处理 |
+|---|---|
+| `champions.last_deck_id` | 置 0（否则英雄指向已删除的卡组） |
+| `arena_state.deck_id` | 置 0（否则 FRA 当前这局指向不存在的卡组） |
+| `tournament_signups.deck_id` | 置 0；该表按 `player_uid` 记录玩家，而 deck id 全局唯一，故只按 deck id 匹配 |
+
+响应为 `RemoveDeckResponse{Error, ErrorMessage, DeckID, succeded}`，客户端以 `IsOk`
+决定是否本地移除，因此**失败时必须回报错误**而不是静默。
+
+> 顺带修掉同类的一处必然崩溃：`AddNewDeck` 的未认证错误路径把枚举写成了
+> `("Error", "enum", 类型名, 值)` 四元组，而编码器 `encode_field` 按三元组解包，
+> 一旦走到就会 `ValueError`。已改为项目统一的
+> `("Error", "enum1", (类型名, 整数值))`。
+
 ## 📁 项目结构
 
     HEX-Private-Server/
@@ -380,9 +506,10 @@ python scripts/validate_deck_import.py
     ├── integration/
     │   ├── deck_import/            # 卡组导入：v1 codec / 文本状态机 / 装配器
     │   └── ai_bridge/              # 原版 AI JSONL 桥接
-    ├── overlay/hex-server/         # 整文件覆盖进 hex-server/ 的 8 个 .py（源头）
-    │   ├── hconnect_server.py      #   含 deck-inbox tick / 魔石 64 位解析补丁
-    │   └── deck_inbox.py           #   卡组导入的跨进程通道
+    ├── overlay/hex-server/         # 整文件覆盖进 hex-server/ 的源码（源头）
+    │   ├── hconnect_server.py      #   含 deck-inbox tick / 魔石 64 位解析 / RemoveDeck
+    │   ├── deck_inbox.py           #   卡组导入的跨进程通道
+    │   └── AssetExtraction/        #   populate_fra_encounters.py 的 Records 头部修复
     ├── legacy-ai-worker/           # 原版 Game.Shared.AI Headless Worker
     ├── client-runtime/             # HEX 客户端 managed DLL
     ├── tests/                      # 集成与回归测试
@@ -405,20 +532,21 @@ python scripts/validate_deck_import.py
 |---|---|
 | `integration/` | **源头** |
 | `hex-server/integration/` | `apply_integration.sh` 生成的**副本**，改了会被覆盖 |
-| `overlay/hex-server/*.py` | **源头**，由 `apply_integration.sh` 拷进 `hex-server/`（8 个文件） |
+| `overlay/hex-server/*.py` | **源头**，由 `apply_integration.sh` 拷进 `hex-server/`（9 个文件，其中 1 个保留 `AssetExtraction/` 子目录） |
 
 改完源头记得跑一次 `bash scripts/apply_integration.sh`。
 
 ### ⚠️ `hconnect_server.py` 是整文件覆盖，上游更新需手工合并
 
-`overlay/hex-server/` 里的 8 个文件是**整文件覆盖**，其中
-`hconnect_server.py` 是上游最大的源文件（约 1.1 MB），携带本项目三处关键补丁：
+`overlay/hex-server/` 里的文件都是**整文件覆盖**，其中
+`hconnect_server.py` 是上游最大的源文件（约 1.1 MB），携带本项目四处关键补丁：
 
 | 补丁 | 作用 |
 |---|---|
 | `_process_deck_inbox()` + 主循环空闲 tick | 消费剪贴板助手投递的卡组导入请求 |
 | ActiveGems 64 位解析（去掉 `& 0xFFFFFFFF`） | 保住 `EGemTypesNew` 的 bit 62 格式位与第 4/5/6 槽 |
 | `GetDeckInfo` 魔石整值透传 | 收藏界面正确显示多槽位魔石 |
+| `RemoveDeck` (dt=2093) 分支 | 删除套牌并清理 `champions`/`arena_state`/`tournament_signups` 的悬空引用 |
 
 **代价**：上游改动 `hconnect_server.py` 时，`git submodule update` 拉下来的新版本
 会被 overlay 覆盖。合并上游更新的流程是
