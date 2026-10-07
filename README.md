@@ -303,7 +303,7 @@ cd HEX-Private-Server
 bash scripts/pull_upstreams.sh
 bash scripts/apply_integration.sh
 
-# 3. 测试（28 项）
+# 3. 测试（32 项）
 python -m unittest discover -s tests
 
 # 4. 构建原版 AI Worker（需 .NET 10 SDK）
@@ -347,7 +347,7 @@ cards_list.extend([card_guid] * count)     # card_guid 是模板 GUID，不是�
 |---|---|
 | `apply_integration.sh` | 拷入 8 个 overlay 文件；`deck_inbox.py`、`integration/deck_import/text_deck.py` 从无到有 |
 | `hconnect_server.py` 打补丁前后 | `_process_deck_inbox` 出现（定义+调用）；魔石解析的 `& 0xFFFFFFFF` 掩码 **2 处 → 0 处** |
-| `python -m unittest discover -s tests` | 28 tests OK |
+| `python -m unittest discover -s tests` | 32 tests OK（1 跳过：单账号库里没有他人卡组可供越权测试） |
 | 牌表文本 → deck-inbox → 服务器消费 | 卡组入库；`active_gems` 含 bit 62；两槽位各解出一颗宝石 |
 | Hex Codex v1 分享链接 → 同一通道 | 同上（合成链接走真实 codec + CRC 校验） |
 | 出站 `EncodedDecks` 载荷 | 每卡发出的是**单颗**宝石枚举值，不是打包整数 |
@@ -492,6 +492,14 @@ python3 AssetExtraction/populate_fra_encounters.py --apply
 > `("Error", "enum", 类型名, 值)` 四元组，而编码器 `encode_field` 按三元组解包，
 > 一旦走到就会 `ValueError`。已改为项目统一的
 > `("Error", "enum1", (类型名, 整数值))`。
+
+回归测试在 [`tests/test_remove_deck.py`](tests/test_remove_deck.py)：它把真库经 SQLite
+backup API 复制到临时文件（含 WAL），再用桩 handler 直接驱动真实分支，验证
+「删掉了 / 悬空引用被清干净 / 删不存在的卡组也照样回包 / 别人的卡组动不了」。
+
+> 该文件刻意放在**父仓库** `tests/` 而不是 `hex-server/tests/`：CI 按固定 commit
+> 检出子模块，子模块内的新文件在 CI 里根本不存在，测试就守不住这个修复。
+> 无 `hex-server/hconnect.db` 时整类跳过，不影响未建库的 clone。
 
 ## 📁 项目结构
 
