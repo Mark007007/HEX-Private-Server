@@ -1,719 +1,2649 @@
+
 # HEX Private Server
 
-一个把 HEX 私服服务器、原客户端 AI、Deck Import 和 Frost Ring Arena 兼容逻辑整合起来的项目。
-
-> **目标：尽量做到拿下来就能跑。**
+> **目标：恢复原版 HEX 客户端可识别的服务器端，而不是重新发明一个“类似 HEX”的游戏。**
 >
-> Windows 用户优先：**双击 `start.bat`**。
-> 
-> Git Bash / Linux / macOS：执行 **`bash start.sh`**。
+> 本分支采用 **C# / .NET 10 + 原客户端最大化复用 + HConnect 协议兼容 + Headless 规则核心 + 可选 RabbitMQ**。
+>
+> 核心策略：
+>
+> **原客户端是协议规范、原版 Shared Mechanics 是规则 Oracle；现代 .NET 服务器负责把这些能力从 Unity 客户端环境中解放出来。**
 
-核心原则：**`hex-server/` 是唯一的规则与游戏状态权威。Dingler 只作为参考/集成来源，不运行第二套服务器规则。**
+---
 
-> **首次安装** → `start.bat`　**日常开服** → `start-game.bat`　**关服** → `stop-game.bat`
+# 1. 当前分支定位
 
-## 📚 文档索引
+本分支：
 
-| 文档 | 内容 |
+~~~text
+dotnet-rewrite
+~~~
+
+是一次重新设计，不沿用旧项目的“Python 服务端 + Dingler overlay + 原版 AI Worker + 多个辅助进程”作为新的权威核心。
+
+旧实现仍可作为历史参考，但新服务器的目标是：
+
+~~~text
+Original HEX Client
+        │
+        ▼
+   HConnect Protocol
+        │
+        ▼
+.NET 10 HexServer
+        │
+        ├── Transport
+        ├── Protocol
+        ├── Services
+        ├── Session
+        ├── Transactions
+        ├── Game Rules
+        ├── Profile
+        ├── SQLite
+        └── Replay
+~~~
+
+RabbitMQ、原版 AI、Arena、Deck Import 等都降级为**可插拔能力**，不是第一阶段的硬依赖。
+
+---
+
+# 2. 为什么不再从头重写 HEX
+
+本次对完整：
+
+~~~text
+Managed.zip
+├── Assembly-CSharp.dll
+└── Assembly-CSharp-firstpass.dll
+~~~
+
+进行静态反编译、CLI 元数据、IL 与依赖调查后，发现一个关键事实：
+
+> **HEX 客户端并不只是 UI。**
+
+其中存在大量 *Game.Shared.* 代码，而且有一部分正是服务器最需要的：
+
+~~~text
+Game.Shared.Mechanics
+Game.Shared.Session
+Game.Shared.AuthoritativeSessionBase
+Game.Shared.Mechanics.Transactions
+Game.Shared.Network.HConnect
+Game.Shared.Network.DataWrapper
+Game.Shared.Network.EncData
+Game.Shared.Network.ObjFmt
+SessionEventArgs
+~~~
+
+因此最有效的方法不是：
+
+~~~text
+DLL
+ ↓
+理解
+ ↓
+全部重写
+~~~
+
+而是：
+
+~~~text
+DLL
+ ↓
+识别可复用部分
+ ↓
+原样 / 最小改造复用
+ ↓
+剥离 Unity / Client-only 依赖
+ ↓
+现代 .NET 10 Server
+~~~
+
+---
+
+# 3. 逆向调查的方法
+
+本项目的逆向不是“看字符串猜协议”，而采用证据链。
+
+## 3.1 PE / CLI 元数据
+
+首先解析：
+
+~~~text
+PE
+ └── CLR Header
+      └── Metadata Root
+           ├── #~ / #-
+           ├── #Strings
+           ├── #Blob
+           ├── #GUID
+           └── #US
+~~~
+
+重点读取：
+
+~~~text
+TypeDef
+Field
+MethodDef
+Param
+TypeRef
+MemberRef
+AssemblyRef
+MethodSpec
+~~~
+
+从而恢复：
+
+~~~text
+Namespace
+Type
+Field
+Method
+Generic instantiation
+Assembly dependency
+~~~
+
+## 3.2 IL 调用图
+
+对于关键类型：
+
+~~~text
+Game.Shared.Mechanics
+Game.Shared.Session
+Game.Shared.AuthoritativeSessionBase
+HConnect
+EncData
+ObjFmt
+~~~
+
+读取方法体 IL，并跟踪：
+
+~~~text
+call
+callvirt
+newobj
+ldfld
+stfld
+ldsfld
+stsfld
+MethodSpec
+MemberRef
+~~~
+
+目的是区分：
+
+~~~text
+纯规则
+   VS
+客户端逻辑
+   VS
+网络层
+   VS
+Unity 依赖
+~~~
+
+## 3.3 依赖分层
+
+每个类型最终标记为：
+
+| 等级 | 含义 |
 |---|---|
-| [`docs/WINDOWS-SETUP.md`](docs/WINDOWS-SETUP.md) | Windows 原生环境搭建、5 个必踩的坑（`python3` 存根 / 缺 `setsid`·`pkill` / MSYS 路径 / Worker 相对路径 / Records 缓存） |
-| [`docs/DECK-IMPORT.md`](docs/DECK-IMPORT.md) | 卡组导入子系统：HConnect 协议契约、剪贴板触发层、跨进程 inbox 通道、导入器设计、踩坑清单 |
-| [`docs/GEM-ENCODING.md`](docs/GEM-ENCODING.md) | 魔石 `EGemTypesNew` 打包格式（bit 62 格式位 / 每槽 10 bit）、两条序列化路径的差异、修复与验证 |
-
-
----
-
-## 🚀 一键安装 / 自检 / 启动
-
-### Windows
-
-安装好 Git for Windows、Python 3 和 .NET 10 SDK 后：
-
-**直接双击：**
-
-```text
-start.bat
-```
-
-脚本会自动：
-
-```text
-同步固定版本的 upstream
-        ↓
-应用 integration overlay
-        ↓
-创建 Python 虚拟环境
-        ↓
-安装服务器依赖
-        ↓
-运行全部 integration tests
-        ↓
-构建 Original-AI Worker
-        ↓
-加载客户端 AI DLL
-        ↓
-执行 AI health + session probe
-        ↓
-检测 Records
-        ↓
-有 Records → 自动启动服务器
-没有 Records → 明确提示缺少 Data/gamedata
-```
-
-### Git Bash / Linux / macOS
-
-```bash
-bash start.sh
-```
-
-不需要手工执行一串测试命令。
+| A — DIRECT REUSE | 可以在服务器直接保留 |
+| B — COMPATIBILITY REUSE | 逻辑本身可用，只需要把旧客户端输入/运行时换掉 |
+| C — REIMPLEMENT | 协议/服务器基础设施需要现代化重写 |
+| D — CLIENT ONLY | UI、渲染、输入等直接排除 |
 
 ---
 
-## 🕹 日常开服 / 关服
+# 4. 证据等级
 
-自检通过后，日常只需要两个脚本。
+所有协议结论按照以下等级理解：
 
-### 启动
+| 等级 | 含义 |
+|---|---|
+| **CONFIRMED** | 从 DLL 元数据 / IL / 常量直接确认 |
+| **HIGH CONFIDENCE** | 多处代码相互印证，但尚未动态抓包 |
+| **RECONSTRUCTED** | 根据多个方法行为恢复出的算法，仍应做 byte-for-byte 验证 |
+| **UNVERIFIED** | 尚无足够证据，不允许写死到正式协议 |
 
-Windows 双击，或 Git Bash 里执行：
+特别原则：
 
-```text
-start-game.bat          # 或 bash scripts/start-game.sh
-```
-
-它会依次完成：
-
-```text
-服务器未运行则启动（restart.sh）
-        ↓
-等待 9933 / 8081 端口真正监听
-        ↓
-按 HEX_DECK_WATCH 启动剪贴板卡组助手
-        ↓
-启动 Hex.exe
-        ↓
-打印端口、客户端 config.ini 实际指向、日志位置
-```
-
-### 停止
-
-```text
-stop-game.bat           # 或 bash scripts/stop-game.sh
-stop-game.bat --all     # 额外关掉游戏客户端
-```
-
-> ⚠️ **直接关掉启动器的控制台窗口不会停掉任何服务。**
->
-> 这是刻意设计：服务用 `setsid nohup` 脱离控制台、游戏用 `cmd /c start`
-> 拉起，目的是让游戏独立于启动器存活。要停服务请用 `stop-game`。
-
-### 本机路径配置：`local-env.sh`
-
-`start-game.sh` 会 source 仓库根目录下的 `local-env.sh`（未跟踪），
-所有机器相关的路径都放这里，脚本本身不含任何硬编码路径。
-
-> **这个文件必须手工创建**（仓库里没有、也不该有）。少了它 `HEX_CLIENT_DIR`
-> 为空，`start-game.sh` 会直接报错退出；`HEX_CODEX_DATA` 未设时分享链接导入
-> 会失败（牌表文本导入不受影响）。
-
-```sh
-HEX_CLIENT_DIR="/d/game/HEX SHARDS OF FATE"     # 游戏安装目录（POSIX 形式）
-HEX_CODEX_DATA="/d/game/HEX-Private-Server/build/codex-data"
-HEX_DECK_USER="123"          # 卡组导入写进哪个玩家（名字或 id）
-HEX_DECK_WATCH=1             # 1 = 同时拉起剪贴板助手
-HEX_ORIGINAL_AI=1            # 1 = 原版客户端 AI
-```
-
-也可以全部用环境变量临时覆盖，例如：
-
-```bash
-HEX_SKIP_CLIENT=1 bash scripts/start-game.sh    # 只起服务，不启动游戏
-```
+> **“看起来合理”绝不等于“HEX 协议就是这样”。**
 
 ---
 
-## 🎮 真正开服只剩一个外部数据依赖
+# 5. HConnect：目前已经确认的真实外层协议
 
-项目可以自己完成安装、构建和 AI 自检。
+## 5.1 标识
 
-真正运行 HEX 对局时，服务器还需要**你自己的 HEX 客户端安装里的**：
+**CONFIRMED**
 
-```text
-Data/gamedata
-```
+HConnect 使用：
 
-因此完整开服命令只多一个参数：
+~~~text
+~HCP~
+~~~
 
-```bash
-HEX_GAMEDATA="/你的HEX安装目录/Data/gamedata" bash start.sh
-```
+长度：
 
-脚本会自动：
+~~~text
+5 bytes
+~~~
 
-1. 提取 Records；
-2. 添加服务器需要的 Records v1 header；
-3. 检查 15 个 Records section；
-4. 通过后自动启动 `hex-server`。
+不是：
 
-也就是说，**不需要你先手工跑 Records 提取、测试、build、restart。**
+~~~text
+0x4858
+~~~
 
-## 🤖 测试原版 AI
+也不是之前假设的 6-byte Magic + Length + CmdId。
 
-项目已经包含原版 HEX 客户端运行时 DLL，位于 client-runtime/。
+## 5.2 UInt32 编码
 
-构建完成后运行：
+**CONFIRMED**
 
-    export HEX_CLIENT_DLL="$PWD/client-runtime/Assembly-CSharp-firstpass.dll"
-    dotnet legacy-ai-worker/bin/Release/net10.0/LegacyAiWorker.dll
+HConnect 的 UInt32 解析：
+
+~~~text
+b0 << 24
+b1 << 16
+b2 << 8
+b3
+~~~
+
+所以：
+
+> **Big Endian**
+
+## 5.3 HCP 外层 Frame
+
+准确布局：
+
+~~~text
+┌──────────────────────────────┐
+│ "~HCP~"                 5 B  │
+├──────────────────────────────┤
+│ contentSize             4 B  │  uint32 BE
+├──────────────────────────────┤
+│ headerSize               4 B  │  uint32 BE
+├──────────────────────────────┤
+│ header                  N B  │
+├──────────────────────────────┤
+│ bodySize                4 B  │  uint32 BE
+├──────────────────────────────┤
+│ body                    M B  │
+└──────────────────────────────┘
+~~~
+
+其中：
+
+~~~text
+contentSize = 4 + N + 4 + M
+            = 8 + N + M
+~~~
+
+总长度：
+
+~~~text
+5 + 4 + contentSize
+= 17 + N + M
+~~~
+
+这个布局来自：
+
+~~~text
+Game.Shared.Network.HConnect.Proto.MakeMessagePacket
+Game.Shared.Network.HConnect.Proto.HasMessage
+~~~
+
+不是猜测。
+
+---
+
+# 6. HConnect 的 TCP 粘包 / 半包行为
+
+**CONFIRMED**
+
+客户端并不假设一次 Read 就能得到完整消息。
+
+它维护：
+
+~~~text
+_IncommingData
+~~~
+
+然后重复调用：
+
+~~~text
+Proto.HasMessage(...)
+~~~
+
+直到：
+
+~~~text
+NeedMore == false
+~~~
+
+所以服务器实现必须支持：
+
+~~~text
+一个 TCP read
+    → 半个 frame
+
+一个 TCP read
+    → 一个 frame
+
+一个 TCP read
+    → 多个 frame
+~~~
+
+.NET 10 实现建议：
+
+~~~text
+Socket
+ ↓
+NetworkStream / Socket
+ ↓
+System.IO.Pipelines
+ ↓
+HcpFrameCodec
+~~~
+
+---
+
+# 7. HConnect Message：Header 与 Body 是不同层
+
+## 7.1 Header
+
+**CONFIRMED**
+
+*Game.Shared.Network.HConnect.Message* 保存：
+
+~~~text
+Headers : Dictionary<string, object>
+Body    : byte[]
+BOffset : int
+BLen    : int
+~~~
+
+Header 会被：
+
+~~~text
+UTF-8
+ ↓
+JSON Reader
+ ↓
+Dictionary<string, object>
+~~~
+
+读取。
+
+所以：
+
+> **HCP Header 是 UTF-8 JSON。**
+
+## 7.2 Body
+
+Body 不等于 JSON。
+
+*Message.BodyJsonDeserialize<T>()* 虽然存在，但更底层的服务器对象编码路径会进入：
+
+~~~text
+EncData
+  ↓
+ObjFmt / Encoder
+~~~
+
+因此必须把：
+
+~~~text
+HCP JSON header
+~~~
+
+和：
+
+~~~text
+HEX custom object body
+~~~
+
+严格区分。
+
+---
+
+# 8. HConnect Session：可靠有序通道
+
+客户端 *Game.Shared.Network.HConnect.Session* 存在：
+
+~~~text
+_version
+_tags
+_sessionId
+
+CCnt
+SCnt
+
+_Outgoing
+_Received
+_bufferedSent
+
+_resend
+_lastReq
+_IncommingData
+~~~
+
+说明 HConnect 并不只是裸 TCP。
+
+## 8.1 出站 Header
+
+**CONFIRMED**
+
+发送消息时会加入：
+
+~~~text
+ccnt
+scnt
+time
+sid
+version
+tags
+~~~
+
+其中：
+
+~~~text
+ccnt = Client message counter
+scnt = Server message counter
+sid  = HConnect session id
+~~~
+
+并通过 Interlocked 读取 / 增加计数器。
+
+## 8.2 入站顺序检查
+
+**CONFIRMED**
+
+客户端要求：
+
+~~~text
+expected scnt = local SCnt + 1
+~~~
+
+并记录：
+
+~~~text
+SCnt
+CCnt
+~~~
+
+发现丢包 / 乱序时会进入：
+
+~~~text
+resend
+~~~
+
+逻辑。
+
+## 8.3 重传
+
+**CONFIRMED**
+
+内部存在：
+
+~~~text
+_tracked
+_buffered_messages
+_resend
+_lastReq
+~~~
+
+并有：
+
+~~~text
+target = "rsnd"
+instance = req
+~~~
+
+相关路径。
+
+所以新服务器必须保留：
+
+~~~text
+ordered delivery
++
+duplicate suppression
++
+missing sequence detection
++
+resend
+~~~
+
+---
+
+# 9. HConnect Session 建立
+
+## 9.1 Client → Server
+
+**CONFIRMED**
+
+客户端创建 session 时发送：
+
+~~~text
+target = "newsession"
+~~~
+
+## 9.2 Server → Client
+
+客户端建立成功时等待：
+
+~~~text
+issuer = "Session"
+target = "create"
+sid = <session id>
+~~~
+
+成功后：
+
+~~~text
+_sessionId = sid
+~~~
+
+并进入：
+
+~~~text
+CONNECTED
+~~~
+
+---
+
+# 10. 默认本地端口
+
+**HIGH CONFIDENCE**
+
+客户端 Connector 的 fallback/default 路径中发现：
+
+~~~text
+port = 0x26cd
+~~~
+
+即：
+
+~~~text
+9933
+~~~
+
+注意：
+
+> 这证明**当前客户端默认/回退配置**使用 9933，不能单凭这个事实断言历史线上服务器永远只使用 9933。
+
+因此本地服务器可以默认监听：
+
+~~~text
+127.0.0.1:9933
+~~~
+
+但必须允许配置覆盖。
+
+---
+
+# 11. DataWrapper
+
+类型：
+
+~~~text
+Game.Shared.Network.DataWrapper
+~~~
+
+关键字段：
+
+~~~text
+RequestId
+DataType
+Bytes
+BytesList
+RequestHandlerSessionId
+Comp
+Tags
+FromUid
+FromId
+PP
+ConH
+JsonReq
+JsonRes
+~~~
+
+核心方法：
+
+~~~text
+ToBytes<T>
+FromBytes<T>
+FromBytes
+~~~
+
+---
+
+# 12. DataWrapper → EncData
+
+**CONFIRMED**
+
+*ToBytes<T>* 的调用链：
+
+~~~text
+DataWrapper.ToBytes<T>
+        ↓
+EncData.Encode<T>
+        ↓
+EncodeCustom / Encoder
+~~~
+
+不是简单：
+
+~~~text
+JsonConvert.SerializeObject
+~~~
+
+直接作为最终 HEX Body。
+
+---
+
+# 13. EncData：自定义编码入口
+
+类型：
+
+~~~text
+Game.Shared.Network.EncData
+~~~
+
+有：
+
+~~~text
+Encode(object, ...)
+Encode<T>(...)
+Decode(...)
+Decode<T>(...)
+EncodeCustom(...)
+DecodeCustom(...)
+DecodeCustomInto(...)
+DescribeTypes(...)
+QuerySerializableMembers(...)
+CheckProp(...)
+~~~
+
+## 13.1 useCUSTOM
+
+**CONFIRMED**
+
+*EncData.Encode/Decode* 首先读取：
+
+~~~text
+GPG.Core.TDF.useCUSTOM
+~~~
+
+当 custom 模式打开时，进入：
+
+~~~text
+EncodeCustom
+DecodeCustom
+~~~
+
+否则不支持的编码方式会抛出：
+
+~~~text
+Encode object isn't supported by this encode type
+Decode object isn't supported by this encode type
+~~~
+
+因此：
+
+> 本项目必须优先实现 HEX 的 **CUSTOM ObjFmt 路径**，而不是自作主张替换成 JSON。
+
+---
+
+# 14. ObjFmt：类型系统
+
+已确认的类型判断器：
+
+~~~text
+IsCollection
+IsBool
+IsString
+IsNumber
+IsDateTime
+IsEnum
+IsUserStruct
+~~~
+
+说明编码器是：
+
+~~~text
+reflection-driven
+type-directed
+recursive
+~~~
+
+结构，而不是固定 DTO layout。
+
+---
+
+# 15. Encoder：类型表与长度表
+
+Encoder 字段：
+
+~~~text
+_types : List<string>
+_sizes : List<long>
+_sep   : byte[]
+~~~
+
+## 15.1 separator
+
+**CONFIRMED**
+
+静态构造函数把：
+
+~~~text
+_sep = UTF8(";")
+~~~
+
+因此：
+
+~~~text
+separator = ';'
+~~~
+
+## 15.2 Type Table
+
+**CONFIRMED**
+
+*WriteTypeTable* 顺序写：
+
+~~~text
+_types[0]
+;
+_types[1]
+;
+_types[2]
+...
+~~~
+
+最终通过 UTF-8 Writer 写入。
+
+## 15.3 Size Table
+
+**CONFIRMED**
+
+*WriteSizeTable* 遍历：
+
+~~~text
+_sizes
+~~~
+
+元素之间写：
+
+~~~text
+;
+~~~
+
+说明对象编码最终包含：
+
+~~~text
+type table
++
+size table
+~~~
+
+辅助数据。
+
+---
+
+# 16. Encoder：对象的基本结构
+
+从 *Encoder.Encode* IL 可以确认至少存在以下顺序：
+
+~~~text
+[optional type/name prefix]
+;
+[size reference]
+;
+[type index]
+;
+[member payload ...]
+[object size patched later]
+~~~
+
+更具体地：
+
+1. 记录当前 Stream.Position。
+2. 写入某个名字/类型前缀。
+3. 写 separator。
+4. 调用 allocSizeRef()。
+5. 写入 size placeholder。
+6. 写 separator。
+7. 调用 FindType(...)。
+8. 写入 type index。
+9. 写 separator。
+10. 查询 Serializable Members。
+11. 对每个属性/字段递归 Encode。
+12. 记录结束位置。
+13. 调用 setSizeRef(index, end - start) 回填对象大小。
+14. 顶层编码追加 TypeTable。
+15. 写 LF。
+16. 追加 SizeTable。
+
+这里要区分：
+
+> **对象 size table 的索引行为已经从 IL 确认，但完整 wire 中 TypeTable / SizeTable 的整体边界仍应通过 byte-for-byte 测试封存。**
+
+因此这一段标记为：
+
+**RECONSTRUCTED**
+
+---
+
+# 17. Encoder：基础类型
+
+## Bool
+
+**CONFIRMED**
+
+布尔值直接写：
+
+~~~text
+"1"
+~~~
+
+或：
+
+~~~text
+"0"
+~~~
+
+之后：
+
+~~~text
+;
+~~~
+
+## Guid
+
+**CONFIRMED**
+
+Guid 使用：
+
+~~~text
+ToString()
+~~~
+
+随后编码长度 + separator + Guid 文本。
+
+## String
+
+**CONFIRMED**
+
+首先：
+
+~~~text
+Encoding.UTF8.GetByteCount(string)
+~~~
+
+然后：
+
+~~~text
+byte length
+;
+UTF8 bytes
+~~~
+
+## Number
+
+**CONFIRMED**
+
+调用：
+
+~~~text
+ObjFmt.EncodeNumber(value, type)
+~~~
+
+---
+
+# 18. ObjFmt 数字编码
+
+这是目前已经可以写成明确规范的一段。
+
+*ObjFmt.EncodeNumber* 对：
+
+~~~text
+Byte
+SByte
+Int16
+Int32
+Int64
+UInt16
+UInt32
+UInt64
+Single
+Double
+Decimal
+~~~
+
+执行对应的：
+
+~~~text
+BitConverter.GetBytes(...)
+~~~
+
+然后调用：
+
+~~~text
+ToHex(...)
+~~~
+
+因此：
+
+> **数字 = primitive bytes + hex text。**
+
+对于当前 Windows 客户端：
+
+~~~text
+BitConverter
+   ↓
+little-endian primitive bytes
+   ↓
+hex text
+~~~
+
+例如概念上：
+
+~~~text
+Int32(1)
+ ↓
+01 00 00 00
+ ↓
+"01000000"
+~~~
+
+这不是把数字简单转成十进制字符串。
+
+---
+
+# 19. Decimal
+
+**CONFIRMED**
+
+Decimal：
+
+~~~text
+Decimal.GetBits()
+~~~
+
+得到 4 个 Int32。
+
+每个 Int32：
+
+~~~text
+BitConverter.GetBytes
+~~~
+
+拼成：
+
+~~~text
+16 bytes
+~~~
+
+最后：
+
+~~~text
+ToHex
+~~~
+
+所以：
+
+~~~text
+Decimal = 16-byte primitive representation → hex text
+~~~
+
+---
+
+# 20. Byte Array
+
+Encoder 存在：
+
+~~~text
+WriteByteArray(Stream, byte[], long len)
+~~~
+
+行为：
+
+1. 如果 len > actual length，则截到实际长度。
+2. 写入 length。
+3. 写入原始 bytes。
+
+同时存在：
+
+~~~text
+WriteHexByteArray
+~~~
+
+又提供：
+
+~~~text
+byte → x2 hex text
+~~~
+
+路径。
+
+所以：
+
+> **不能简单假设所有 byte[] 都使用一种 wire representation。**
+
+真正编码形式由：
+
+~~~text
+ObjFmt
++
+Encoder.Encode
++
+field type
+~~~
+
+共同决定。
+
+---
+
+# 21. Collections / Arrays
+
+已确认：
+
+~~~text
+Collection / Array
+    ↓
+count
+;
+element #0
+element #1
+element #2
+...
+~~~
+
+集合元素会取得运行时类型，再递归调用 Encode。
+
+*byte[]* 则走专门分支。
+
+---
+
+# 22. Enum
+
+**CONFIRMED**
+
+Enum 不直接写底层整数。
+
+Encoder 使用：
+
+~~~text
+Enum.GetName(...)
+~~~
+
+因此形式是：
+
+~~~text
+Enum Name
+;
+~~~
+
+所以服务端不要看到 enum 就强制写整数。
+
+---
+
+# 23. DateTime
+
+**CONFIRMED**
+
+使用：
+
+~~~text
+ToString(InvariantCulture)
+~~~
+
+然后：
+
+~~~text
+byte length
+;
+datetime string
+~~~
+
+---
+
+# 24. Decoder
+
+Decoder 存在：
+
+~~~text
+_types
+_sizes
+_byte_c
+~~~
+
+以及：
+
+~~~text
+ReadTypeTable
+ReadSizeTable
+ReadToChar
+ReadToSeperator
+Decode<T>
+Decode(...)
+~~~
+
+其行为与 Encoder 对称。
+
+类型恢复涵盖：
+
+~~~text
+Bool
+String
+Number
+DateTime
+Enum
+Collection
+Array
+KeyValuePair
+UserStruct
+~~~
+
+对于集合：
+
+~~~text
+count
+↓
+repeat Decode(element)
+~~~
+
+对于 KeyValuePair：
+
+~~~text
+Key
+Value
+~~~
+
+分别寻找对应字段。
+
+---
+
+# 25. DataWrapper 的 compression
+
+*DataWrapper.FromBytes* 明确区分：
+
+~~~text
+compression == 0
+compression == 1
+~~~
+
+并存在：
+
+~~~text
+Unknown compression type
+~~~
+
+异常路径。
+
+因此 *Comp* 不是装饰性字段。
+
+但当前还不足以单凭这一层把：
+
+~~~text
+0 = 某算法
+1 = 某算法
+~~~
+
+写成最终规范。
+
+状态：
+
+**HIGH CONFIDENCE / 待动态验证**
+
+---
+
+# 26. Request / Response 的真实层次
+
+HEX 网络对象应理解为：
+
+~~~text
+HCP Frame
+    │
+    ├── JSON Headers
+    │
+    └── Binary Body
+            │
+            ▼
+        DataWrapper
+            │
+            ├── RequestId
+            ├── DataType
+            ├── Comp
+            ├── Tags
+            ├── FromUid
+            └── payload bytes
+                    │
+                    ▼
+                 EncData
+                    │
+                    ▼
+                  ObjFmt
+                    │
+                    ▼
+             Request / Response
+~~~
+
+---
+
+# 27. Service ID
+
+目前从服务初始化代码恢复出：
+
+| Service | ID |
+|---|---:|
+| Tournaments | 242 / 0xF2 |
+| Monitor | 243 / 0xF3 |
+| Profile | 245 / 0xF5 |
+| GameSession | 246 / 0xF6 |
+| Matchmaking | 247 / 0xF7 |
+| AI | 248 / 0xF8 |
+| Escrow | 249 / 0xF9 |
+| GM | 251 / 0xFB |
+| Mail | 252 / 0xFC |
+| Campaign | 253 / 0xFD |
+| LoadBalancer | 254 / 0xFE |
+
+这些属于：
+
+**CONFIRMED / HIGH CONFIDENCE**
+
+---
+
+# 28. GameSession 方法 ID
+
+从 *GameSessionService.Initialize()* 恢复：
+
+| ID | Method |
+|---:|---|
+| 3003 | TryReconnectionToDisconnectedGame |
+| 3005 | StartSession |
+| 3007 | StartEncounter |
+| 3009 | FindReconnectionInformation |
+| 3011 | FindSession |
+| 3013 | JoinDisconnectedGame |
+| 3015 | JoinSession |
+| 3019 | ReadyForGameSetup |
+| 3025 | LeaveSession |
+| 3027 | EndSession |
+| 3031 | GetSessionList |
+| 3047 | FindSessionById |
+| 3049 | SessionResync |
+| 3050 | PlayerAdded |
+| 3051 | PlayerRemoved |
+| 3052 | GameContinue |
+| 3053 | GameStarted |
+| 3054 | GameEnded |
+| 3055 | SessionSyncEvent |
+| 3056 | ChampionStatsUpdated |
+
+同时存在对应的：
+
+~~~text
+RequestArgs
+ResponseArgs
+~~~
+
+例如：
+
+~~~text
+StartSessionRequestArgs
+StartSessionResponseArgs
+
+JoinSessionRequestArgs
+JoinSessionResponseArgs
+
+PlayerTransactionRequestArgs
+PlayerTransactionResponseArgs
+
+ReadyForGameSetupRequestArgs
+ReadyForGameSetupResponseArgs
+~~~
+
+因此可以自动生成新的 *HexServer.Contracts*，而不需要人工猜 DTO。
+
+---
+
+# 29. Game.Shared.Mechanics：最大的资产
+
+目前已分析：
+
+~~~text
+Game.Shared.Mechanics
+≈ 261 个直接命名空间类型
+
+Game.Shared.Mechanics.*
+≈ 706 个类型
+~~~
+
+重要类型族：
+
+~~~text
+Card
+CardData
+CardTemplate
+Ability
+AbilityInstance
+Effect
+EffectInstance
+GenericEffect
+Target
+Requirement
+Modifier
+Filter
+Chain
+Combat
+Cost
+Trigger
+...
+~~~
+
+更重要：
+
+静态 IL 调用扫描中，这些 Mechanics 类型没有发现直接：
+
+~~~text
+UnityEngine.*
+Game.Client.*
+~~~
+
+调用。
+
+因此：
+
+# **DIRECT REUSE 是最高优先级**
+
+---
+
+# 30. Game.Shared.Session
+
+这一层已经存在大量真正游戏操作：
+
+~~~text
+CanPlayCard
+CanPlayResourceCard
+PayCardCost
+PayAbilityCost
+
+CreateAbility
+PushAbilityOnChain
+FinishAbilityOnChain
+ActivateAbility
+ActivateTriggeredAbility
+ResolveTopOfChain
+
+DrawCard
+DestroyCard
+GraveyardCard
+DiscardCard
+MoveCard
+TapCard
+UntapCard
+ReadyCard
+
+PlayResource
+PlayPermanent
+CastSpell
+PlaySpell
+PlayChampion
+
+Attack
+Combat
+Priority
+Turn
+~~~
+
+静态检查同样没有发现这部分直接调用：
+
+~~~text
+UnityEngine.*
+Game.Client.*
+~~~
+
+因此 *Game.Shared.Session* 很可能本来就是共享游戏状态 / 规则运行层。
+
+---
+
+# 31. AuthoritativeSessionBase
+
+这是整个逆向结果中最重要的类型之一：
+
+~~~text
+Game.Shared.AuthoritativeSessionBase
+~~~
+
+关键方法：
+
+~~~text
+StartGame
+InitializeGame
+InitEncounter
+LoadDeckForPlayers
+InstantiateDeck
+
+Mulligan
+PlayerDrawStartingHand
+DrawCard
+
+CastSpell
+ActivateAbility
+ActivateTriggeredAbilities
+ActivateAutomaticAbilities
+
+HandleTriggeredAbilities
+HandleTransaction
+HandleGameEvent
+
+PushGameAction
+DetectStateBasedTriggers
+RecalculateSessionEffects
+
+DeclareAttack
+AdvanceToNextTurnState
+
+EndGame
+CheckForVictory
+~~~
+
+关键字段：
+
+~~~text
+m_ActionStack
+m_NextSessionCardId
+m_NextAbilityInstanceId
+
+m_RandomNumberGeneratorW
+m_RandomNumberGeneratorZ
+
+m_EventQueue
+m_PendingTriggers
+m_HandledTriggers
+
+m_CurrentPriorityPlayer
+~~~
+
+这基本就是：
+
+~~~text
+权威状态机
++
+交易 / 事件驱动
++
+确定性随机
+~~~
+
+的服务器级核心。
+
+---
+
+# 32. AuthoritativeSessionBase 的最小旧版依赖
+
+进一步做 IL 外部调用扫描后：
+
+## 没有发现：
+
+~~~text
+UnityEngine.*
+~~~
+
+直接调用。
+
+这是极大的利好。
+
+## 但是存在少量：
+
+~~~text
+Game.Client.Network.Profile.GetDeckDetailsResponse
+Game.Client.Network.Campaign.GetArenaBattleModsResponse
+~~~
+
+主要集中在：
+
+~~~text
+OnReceiveDeckDetailsResponse
+<ApplyEncounterStartModifications>m__1
+~~~
+
+因此：
+
+> **不要重写整个 AuthoritativeSessionBase。**
+
+应该切成：
+
+~~~text
+AuthoritativeSessionBase
+       │
+       ├── Game Rules        ← 原版尽量保留
+       │
+       └── external data     ← Server Adapter
+~~~
+
+---
+
+# 33. Server Adapter
+
+建议：
+
+~~~csharp
+public interface IServerProfileProvider
+{
+    DeckData GetDeck(...);
+    ChampionData GetChampion(...);
+}
+~~~
+
+以及：
+
+~~~csharp
+public interface IEncounterModificationProvider
+{
+    IReadOnlyList<EncounterModification> GetModifications(...);
+}
+~~~
+
+运行期间：
+
+~~~text
+Legacy Client Response
+        ↓
+Legacy Adapter
+
+Local SQLite/Profile
+        ↓
+Server Provider
+~~~
+
+最终删除：
+
+~~~text
+Game.Client.Network.*
+~~~
+
+依赖。
+
+---
+
+# 34. Transactions：不重新发明
+
+已发现：
+
+~~~text
+Game.Shared.Mechanics.Transactions
+~~~
+
+有：
+
+~~~text
+Transaction
+SubmitTransaction
+
+PlayTroopTransaction
+PlaySpellTransaction
+PlayChampionTransaction
+PlayResourceTransaction
+
+ActivateAbilityTransaction
+PassPriorityTransaction
+DiscardTransaction
+MulliganTransaction
+
+CommitTroopsToAttackTransaction
+CommitTroopsToDefenseTransaction
+AssignDamageOrderTransaction
+
+ReadyCardTransaction
+QuitGameTransaction
+...
+~~~
+
+*Transaction* 自身有：
+
+~~~text
+Initialize
+Require
+Validate
+Resolve
+GetSerializedBytes
+~~~
+
+所以服务器处理流程应该是：
+
+~~~text
+Client Request
+      ↓
+Decode
+      ↓
+Create Transaction
+      ↓
+Initialize
+      ↓
+Require / Validate
+      ↓
+Resolve
+      ↓
+GameState changed
+      ↓
+SessionEvent emitted
+~~~
+
+而不是另造第二套命令体系。
+
+---
+
+# 35. SessionEvent：继续复用原版
+
+存在：
+
+~~~text
+CardDrawnSessionEventArgs
+CardMovedSessionEventArgs
+CardDestroyedSessionEventArgs
+CardDiscardedSessionEventArgs
+
+CardTappedSessionEventArgs
+CardUntappedSessionEventArgs
+
+TroopCardPlayedSessionEventArgs
+SpellCardPlayedSessionEventArgs
+ResourceCardPlayedSessionEventArgs
+ChampionCardPlayedSessionEventArgs
+
+AttackDeclaredSessionEventArgs
+BlockersAssignedSessionEventArgs
+
+BeginCombatResolutionSessionEventArgs
+EndCombatResolutionSessionEventArgs
+CombatPhaseResolvedSessionEventArgs
+
+TurnPhaseUpdatedSessionEventArgs
+PlayerCurrentResourcePoolChangedSessionEventArgs
+PlayerTotalResourcePoolChangedSessionEventArgs
+
+AbilityActivationDataRequiredSessionEventArgs
+AbilityCancelledSessionEventArgs
+AbilityPushedOnChainSessionEventArgs
+TriggeredAbilityActivationDataRequiredSessionEventArgs
+~~~
+
+并存在：
+
+~~~text
+ToByteArray
+BeginWrite
+EndWrite
+BeginRead
+EndRead
+~~~
+
+以及：
+
+~~~text
+NetworkPacketSessionEventArgs
+~~~
+
+因此：
+
+> **服务器 Event 尽量产生原版 Event，而不是新发 JSON Event。**
+
+---
+
+# 36. 最佳服务器结构
+
+~~~text
+HEX-Private-Server/
+│
+├── src/
+│   ├── HexServer.Server/
+│   │
+│   ├── HexServer.Protocol/
+│   │   ├── HConnect/
+│   │   ├── ObjFmt/
+│   │   ├── EncData/
+│   │   ├── DataWrapper/
+│   │   └── Services/
+│   │
+│   ├── HexServer.Contracts/
+│   │   ├── Requests/
+│   │   ├── Responses/
+│   │   ├── Events/
+│   │   ├── Services/
+│   │   └── Enums/
+│   │
+│   ├── HexServer.Game/
+│   │   ├── Shared/
+│   │   ├── Session/
+│   │   ├── Mechanics/
+│   │   ├── Transactions/
+│   │   ├── Abilities/
+│   │   └── Effects/
+│   │
+│   ├── HexServer.Profile/
+│   │
+│   └── HexServer.Storage/
+│
+├── legacy/
+│   └── HexLegacyCompat/
+│
+├── tools/
+│   ├── HexExtractor/
+│   ├── HexProbe/
+│   └── HexReplay/
+│
+├── data/
+├── captures/
+├── logs/
+│
+├── HexServer.sln
+└── start.bat
+~~~
+
+---
+
+# 37. 三层复用模型
+
+## A — 原样复用
+
+优先目标：
+
+~~~text
+Game.Shared.Mechanics
+Game.Shared.Session
+Transactions
+SessionEvents
+Card / Ability / Effect
+~~~
+
+## B — 兼容复用
+
+目标：
+
+~~~text
+AuthoritativeSessionBase
+HConnect logical behavior
+ObjFmt
+EncData
+DataWrapper
+~~~
+
+做：
+
+~~~text
+minimum compatibility shim
+~~~
+
+## C — 现代化重写
+
+目标：
+
+~~~text
+Socket transport
+Pipelines
+Service host
+Session scheduler
+SQLite persistence
+configuration
+logging
+replay
+~~~
+
+---
+
+# 38. 为什么采用 Modular Monolith
+
+第一版不要拆：
+
+~~~text
+Gateway.exe
+Logic.exe
+Profile.exe
+Battle.exe
+RabbitMQ
+Redis
+...
+~~~
+
+而是：
+
+~~~text
+HexServer.exe
+~~~
+
+内部：
+
+~~~text
+Transport
+Protocol
+Services
+Session
+Game
+Profile
+Storage
+~~~
+
+这样：
+
+~~~text
+1 个进程
+1 个权威状态
+1 个调试入口
+1 个启动脚本
+~~~
+
+更适合 Windows 本地私服、双人测试和持续逆向。
+
+---
+
+# 39. RabbitMQ 的最终位置
+
+保留：
+
+~~~csharp
+public interface IMessageBus
+{
+    Task PublishAsync<T>(string topic, T message);
+}
+~~~
+
+实现：
+
+~~~text
+InMemoryMessageBus
+RabbitMqMessageBus
+~~~
+
+默认：
+
+~~~text
+InMemory
+~~~
+
+RabbitMQ 只用于真正需要：
+
+~~~text
+异步工作
+日志
+统计
+后台任务
+AI worker
+邮件
+批处理
+~~~
+
+玩家关键游戏动作默认：
+
+~~~text
+Client
+ ↓
+Session
+ ↓
+Transaction
+ ↓
+State
+ ↓
+Event
+ ↓
+Client
+~~~
+
+不经过 MQ。
+
+---
+
+# 40. Session 并发模型
+
+每局：
+
+~~~text
+Session
+   ↓
+Channel<GameCommand>
+   ↓
+single ordered consumer
+   ↓
+Transaction
+~~~
+
+严格：
+
+~~~text
+Transaction #1
+Transaction #2
+Transaction #3
+Transaction #4
+~~~
+
+顺序执行。
+
+这非常适合：
+
+~~~text
+priority
+stack
+combat
+trigger
+~~~
+
+---
+
+# 41. Deterministic Replay
+
+原版 *AuthoritativeSessionBase* 已存在：
+
+~~~text
+m_RandomNumberGeneratorW
+m_RandomNumberGeneratorZ
+~~~
+
+因此新服务器应把：
+
+~~~text
+Match Seed
+~~~
+
+作为正式状态的一部分。
+
+保存：
+
+~~~text
+match/
+├── seed
+├── transactions
+└── events
+~~~
+
+同一：
+
+~~~text
+Seed
++
+Transaction sequence
+~~~
+
+应该产生相同结果。
+
+这提供：
+
+~~~text
+Bug reproduce
+Replay
+Differential testing
+Desync detection
+~~~
+
+---
+
+# 42. Legacy Oracle：最大化利用原客户端
+
+开发期间可以同时运行：
+
+~~~text
+Original Shared Logic
+        ↓
+       Oracle
+
+New Server
+        ↓
+       Result
+~~~
+
+对同一 Transaction 比较：
+
+~~~text
+State
+Events
+Cards
+Resources
+Priority
+Stack
+~~~
+
+即：
+
+~~~text
+Original State
+      VS
+New State
+~~~
+
+第一次不一致的位置就是：
+
+~~~text
+First Divergence
+~~~
+
+这比手工打一万局游戏更可靠。
+
+---
+
+# 43. 为什么这比直接“复制 DLL”更好
+
+不要：
+
+~~~text
+HexServer
+   ↓
+Assembly-CSharp.dll
+   ↓
+Unity dependency
+   ↓
+Mono dependency
+   ↓
+越来越大
+~~~
+
+而是：
+
+~~~text
+Original DLL
+    ↓
+dependency analysis
+    ↓
+minimal reuse set
+    ↓
+compatibility adapter
+    ↓
+modern server
+~~~
+
+随着服务器成熟：
+
+~~~text
+Legacy dependency
+      ↓
+逐步减少
+~~~
+
+最终目标：
+
+~~~text
+正式服务器
+   ↓
+.NET 10
+   ↓
+不依赖 Unity
+   ↓
+不依赖完整原客户端 DLL
+~~~
+
+但保留：
+
+~~~text
+Original Oracle
+~~~
+
+作为长期回归基准。
+
+---
+
+# 44. HexExtractor 应该做什么
 
 输入：
 
-    {"protocol":1,"request_id":"1","action":"health","payload":{}}
-
-正常情况下会得到 ready 状态。
-
-然后可以测试 AI 会话创建：
-
-    {"protocol":1,"request_id":"2","action":"probe","payload":{"session_uid64":10001,"ai_player_uid64":20001,"human_player_uid64":20002,"ai_position":1,"session_name":"HEX AI Probe","session_flags":128}}
-
-这一步成功，说明客户端 AI DLL、Game.Shared.AI 和 Headless ClientSessionBase 基本桥接正常。
-
-## 🎮 真正启动服务器
-
-如果只是确认项目能运行，做到上面的测试就够了。
-
-要真正开始 HEX 对局，还需要你自己的 HEX 安装中的：
-
-    Data/gamedata
-
-### 生成 Records
-
-执行：
-
-    HEX_GAMEDATA="/你的HEX安装目录/Data/gamedata" bash scripts/prepare_client_records.sh
-
-脚本会自动完成 Records 提取、header 添加和完整性检查。
-
-生成位置：
-
-    hex-server/Records/
-
-完整服务器需要以下 15 个 section：
-
-    AbilityEffectConditionTemplate.jsonl
-    AbilityEffectTemplate.jsonl
-    AbilityTargetTemplate.jsonl
-    AbilityTemplate.jsonl
-    CardCounterTemplate.jsonl
-    CardTemplate.jsonl
-    ChampionClassData.jsonl
-    ChampionTalentData.jsonl
-    ChampionTemplate.jsonl
-    ConversationTemplate.jsonl
-    DeckTemplate.jsonl
-    EncounterDeck.jsonl
-    InventoryItemData.jsonl
-    QuestTemplate.jsonl
-    SceneData.jsonl
-
-这些数据来自客户端安装，不应在没有相关权利的情况下重新发布。
-
-### 启动
-
-    cd hex-server
-    bash restart.sh
-
-服务器详细配置见 hex-server/HOWTO.md。
-
-## 🃏 在游戏里按 Ctrl+V 导入卡组
-
-客户端是固定二进制，**卡牌收藏界面没有粘贴处理器**，所以触发器放在进程外：
-一个剪贴板助手监听 `Ctrl+V`，把内容交给正在运行的服务器导入，再由服务器
-**推送 profile stream** —— 因此卡组是**当场出现**，不需要重新登录。
-
-### 用法
-
-1. `start-game.bat`（确保 `HEX_DECK_WATCH=1`）—— 服务器 + 助手 + 游戏一起起来
-2. 进入游戏 → 打开**卡牌收藏**
-3. 复制一份 Hex Codex 分享链接，或复制页面上的牌表文本
-4. **在游戏窗口内按 Ctrl+V**
-5. 卡组立刻出现在收藏列表里
-
-助手日志：`build/deck-watch.log`；服务器日志：`/tmp/hconnect_log.txt`。
-
-### 支持的两种输入
-
-| 输入 | 说明 |
-|---|---|
-| Hex Codex **v1 分享链接** | 需要 `HEX_CODEX_DATA` 指向 `build/codex-data`（**已随仓库提供**，见下方「Hex Codex 目录数据」） |
-| **牌表文本** | 站点渲染的多行格式和 `4x 卡名` 单行格式都支持，**不需要任何数据文件** |
-
-### Hex Codex 目录数据
-
-`build/codex-data/` 已随仓库提交，所以**全新 clone 无需联网即可导入分享链接**：
-
-| 文件 | 内容 |
-|---|---|
-| `ids.json` | 3124 条站点 id → 游戏 GUID 映射（`card` / `champion` / `gem` 三类，id 区间互不重叠） |
-| `gems.json` | 73 条宝石「类型名 → 显示名」映射 |
-
-只有需要**刷新**（站点新增卡牌）时才重新生成；它需要本机已建库，并访问 Hex Codex 卡组构建页：
-
-```bash
-python scripts/build_codex_ids.py --cards-html <卡组构建页URL或本地保存的.html> --player 123
-# 默认输出到 build/codex-data；--records / --db 可覆盖默认路径
-```
-
-站点名到 GUID 的解析按**名称**匹配本地数据库（三类均 100% 命中）。卡名按印次重复，
-因此解析用的是基于 Records 去重后的目录：每个 `m_DesignerCardId` 一行（`DELETE*` 条目丢弃），
-无 designer id 的行按 (name, cost, type, subtype) 合并；仍有多个候选时优先玩家已拥有的印次，
-否则取 guid 最小 —— 保证重复运行结果稳定。
-
-> 与 `hex-server/Records/` 同性质：数据来自客户端/站点，**再分发以其适用授权条款为准**。
-
-### 设计取舍
-
-- **缺卡不报错**：能导入多少导多少，缺口在日志和聊天命令里明确报告；**绝不伪造卡牌**
-- **卡名歧义确定性选择**：同名卡按印次重复，优先玩家已拥有的印次，否则取 guid 最小
-- **卡组重名自动加后缀**：`FRA Hieroplants 4000 (2)`
-- **同内容 30 秒去重**：避免「按了没反应就再按一次」生成一叠重复卡组
-- **只在 `Hex.exe` 是前台窗口时响应**，不干扰其他程序
-
-> 技术细节（协议契约、跨进程通道、踩坑清单）见
-> [`docs/DECK-IMPORT.md`](docs/DECK-IMPORT.md)。
-
-### 也可以不走剪贴板
-
-游戏内聊天命令（同一套导入器、同样免重登刷新）：
-
-```text
-/importdeck <Hex Codex 分享链接>
-/importdecktext Champion: Ozawa ; 4x Chill ; Reserves: ; 2x Extinction
-```
-
-## 🧪 全新 clone 流程（已在干净 clone 中实测）
-
-```bash
-# 1. 拉取（含 submodule，固定到 UPSTREAM.lock 的 commit）
-git clone --recurse-submodules https://github.com/Mark007007/HEX-Private-Server.git
-cd HEX-Private-Server
-
-# 2. 固定上游 + 应用 overlay（8 个整文件 + integration 包）
-bash scripts/pull_upstreams.sh
-bash scripts/apply_integration.sh
-
-# 3. 测试（32 项）
-python -m unittest discover -s tests
-
-# 4. 构建原版 AI Worker（需 .NET 10 SDK）
-dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
-
-# 5. 建库：从自己的客户端提取 Records（唯一的外部数据依赖）
-HEX_GAMEDATA="<客户端>/Data/gamedata" bash scripts/prepare_client_records.sh
-
-# 6. 填充冰霜竞技场遭遇表（不跑则进 FRA 报 "No FRA encounter is eligible"）
-cd hex-server && python3 AssetExtraction/populate_fra_encounters.py --apply && cd ..
-
-# 7. 创建 local-env.sh —— 未跟踪，必须手工创建（内容见上节）
-#    HEX_CLIENT_DIR / HEX_CODEX_DATA / HEX_DECK_USER / HEX_DECK_WATCH=1
-
-# 8. 开服（服务器 + 剪贴板助手 + 游戏）
-start-game.bat
-```
-
-Hex Codex 目录数据（`build/codex-data`）**已随仓库提交**，因此第 7 步之后即可直接导入
-分享链接，**不需要联网、不需要额外生成步骤**。
-
-### 初始卡组曾经存成模板 GUID（已修）
-
-创建英雄时自动生成的初始卡组，原本把**模板 GUID** 写进 `decks.cards`：
-
-```python
-cards_list.extend([card_guid] * count)     # card_guid 是模板 GUID，不是实例 id
-```
-
-而 `decks.cards` 必须存**实例 id** —— 编码时每个条目都要经
-`db_card_instance_for_encoded_deck` 解析，模板 GUID 解析不出任何东西，
-于是**整副牌在客户端显示为空，且任何地方都不报错**。
-已改为按玩家实际拥有的实例解析（并优先复用已发放的实例），
-存量的这类卡组需要按同名兜底重解析一次。
-
-### 已验证 / 未验证
-
-**已在干净 clone（含 submodule）中实测通过：**
-
-| 检查项 | 结果 |
-|---|---|
-| `apply_integration.sh` | 拷入 8 个 overlay 文件；`deck_inbox.py`、`integration/deck_import/text_deck.py` 从无到有 |
-| `hconnect_server.py` 打补丁前后 | `_process_deck_inbox` 出现（定义+调用）；魔石解析的 `& 0xFFFFFFFF` 掩码 **2 处 → 0 处** |
-| `python -m unittest discover -s tests` | 32 tests OK（1 跳过：单账号库里没有他人卡组可供越权测试） |
-| 牌表文本 → deck-inbox → 服务器消费 | 卡组入库；`active_gems` 含 bit 62；两槽位各解出一颗宝石 |
-| Hex Codex v1 分享链接 → 同一通道 | 同上（合成链接走真实 codec + CRC 校验） |
-| 出站 `EncodedDecks` 载荷 | 每卡发出的是**单颗**宝石枚举值，不是打包整数 |
-
-> 上游 `hconnect_server.py` **本身就带那个 32 位截断 bug**（2 处），所以「打补丁前」的
-> 对照是在干净 clone 上直接观察到的，不是推测。
-
-**仍需在游戏里手动确认**（无法脚本化）：
-
-- 收藏界面按 **Ctrl+V** 的真实热键路径（需要真人按键 + `Hex.exe` 为前台窗口）
-- 魔石在游戏内卡牌上的显示与对局中生效
-- Original AI 全链路（见文末「已知未自动化验证的部分」）
-
-### 一键复跑这套检查
-
-```bash
-python scripts/validate_deck_import.py
-```
-
-脚本会先读 `local-env.sh`，所以默认就用启动器那套玩家/目录/数据库配置，通常无需任何参数。
-优先级：`--player` > 环境变量 > `local-env.sh`（文件里的 Git Bash 形式路径
-`/d/game/...` 会自动转成原生路径）。
-
-它验证的是**部署后的 `hex-server/` 树**（也就是 clone + `apply_integration.sh` 的结果），
-因此能抓到测试套件抓不到的那类问题：**改了 `integration/` 或 `overlay/` 却忘了重新 apply**
-—— 单元测试照样全绿，而运行中的服务器还是旧代码。
-
-1. overlay 是否真的应用（`deck_inbox.py` 在不在、上游那个 32 位截断掩码是否已消失）
-2. 牌表文本与 Hex Codex 分享链接**是否都能经 `hex-server/deck-inbox/` 真正入库**
-   —— 就是 Ctrl+V 助手走的那条通道
-3. 出站 profile 载荷里的宝石**是否为单颗枚举值**，而不是打包整数
-
-**它不碰你的真库**：`hex-server/hconnect.db` 经 SQLite backup API 复制到临时文件，
-`HEX_DB_PATH` 指向副本，跑完删除；`HEX_DECK_INBOX` 同样重定向到临时目录。
-退出码 `0` = 全部通过，`1` = 有失败项（CI 可用）。
-
-## 🎁 测试账号：刷入全卡全装备
-
-```bash
-python scripts/grant_full_collection.py --dry-run   # 先看规模
-python scripts/grant_full_collection.py             # 写入
-```
-
-给一个账号补齐**全部可收集卡牌**与**全部装备**，方便随时组任何牌。默认：
-
-| 项 | 默认 | 说明 |
-|---|---|---|
-| 每张卡的份数 | **4** | 卡组上限 |
-| 每件装备的份数 | **1** | 每个槽位只能装一件 |
-| 卡牌范围 | 全部可收集模板 | `card_type IN ('Bane','Mod')` 是战役灾祸/Arena 咒文，**不是收藏品**，已排除 |
-| 装备来源 | `Records/InventoryItemData.jsonl` | 取客户端的 `InventoryEquipmentData`，GUID 与客户端一一对应 |
-
-两个写入位置都按服务端自己的写法来，不存在客户端不认的旁路：
-
-- 卡牌同时写 `collections`（模板+数量，`GetPlayerCardIDList` 读这个）
-  和 `card_instances`（每张实体卡一行，**登录时客户端收藏夹就是从这来的**）
-- 装备写 `player_inventory`，`client_item_uid` 即客户端去重用的 `Id`
-
-**幂等**：只补齐不足的份数，已有卡片一张不动；重复执行不改任何东西。
-需要调整时加参数重跑即可（`--cards 4`、`--equipment 4`、`--pvp-legal-only`）。
-
-> ⚠️ 先停服务器再执行 —— 脚本直接写库。
-> 执行前会提示先备份；登录时收藏随 profile stream 一起下发，无需二次重登。
-
-### 已知的既有数据问题（与刷入无关）
-
-`collections.quantity` 与 `card_instances` 行数理论上一一对应，但两者由不同函数写入，
-而实例插入是 `INSERT OR IGNORE`：**重复发放时数量增加、重复的实例行被丢弃**，于是产生漂移
-（客户端收藏夹按实例渲染，卡组上限却按 `collections` 算，可能出现「允许放 4 张但只有 3 张实物」）。
-脚本内置了**对账修复**，会把这种漂移补回一致，并在输出里报告条数。
-
-### 收藏界面卡顿：为什么该砍印次而不是份数
-
-反编译客户端（`Assembly-CSharp` 202666）确认组牌界面的列表**按卡牌一行，不按份数**：
-
-```csharp
-public override void Add(CardTemplate template, ulong id)
-{
-    if (!m_Table.ContainsKey(template.m_Id)) { ...m_Data.Add(cardEntry); }  // 新卡牌 = 一行
-    else { m_Table[template.m_Id].AddInstanceId(id); }                      // 多份只追加 id
-}
-```
-
-成本有两个动因：
-
-| 动因 | 影响 | 现状 |
-|---|---|---|
-| **卡牌种类数**（模板数） | UI 行数；每次改筛选/排序都全量重扫 | 7,207 |
-| **实例总数** | 构建列表时那一遍全量遍历（单帧内，不 yield） | 29,339 |
-
-客户端**有**窗口虚拟化（只渲染 14 行），但**没有**懒加载，也没有任何「大收藏」特殊分支。
-所以唯一的服务端杠杆是减少数据量，而**砍印次能同时降两个动因，砍份数只能降第二个**：
-
-```bash
-python scripts/grant_full_collection.py --collapse-printings --dry-run
-```
-
-该模式每个卡名只保留一个印次（优先 PvP 可用），**每个印次仍是 4 份**，因此
-每种牌照样能放满 4 张；被卡组引用的实例一律保留。
-
-| | 之前 | 折叠后 |
-|---|---|---|
-| 模板（UI 行数） | 7,207 | **3,797**（-47%） |
-| 卡实例（加载遍历） | 29,339 | **15,452**（-47%） |
-| 登录推送分块 | 59 块 | **31 块** |
-| 唯一卡名覆盖 | 3,789 | 3,789（100%） |
-
-**可逆**：重跑不带 `--collapse-printings` 即恢复全部印次 × 4。
-
-### 冰霜竞技场（FRA）需要先填充遭遇表
-
-`fra_encounters` 为空时，进 FRA 会报 `No FRA encounter is eligible for rank 1`。
-填充工具是 `AssetExtraction/populate_fra_encounters.py`：
-
-```bash
-cd hex-server
-python3 AssetExtraction/populate_fra_encounters.py --apply
-```
-
-> 该工具原本**第 1 行就崩** —— 它没跳过 `prepare_client_records.sh` 写进去的
-> `# HEX-PRIVATE-SERVER Records v1` 头部注释。已修复：跳过 `#` 注释行，
-> 但仍对真正损坏的记录报错（静默返回空表会让问题延迟到「无法开局」才暴露）。
-
-### 删除套牌原本静默失效（已修）
-
-卡组编辑器里的「删除套牌」发的是 `ProfileService.RemoveDeck`，**dt=2093**。
-服务端没有这个分支，日志只留下 `Unhandled DataType=2093` 且**不回任何响应** ——
-客户端的回调（`UIDeckEditorViewModel.DeleteDeck`）永远不触发，所以列表里删不掉。
-
-已实现该分支，并在删除后清理三类**没有外键声明**的悬空引用：
-
-| 引用 | 处理 |
-|---|---|
-| `champions.last_deck_id` | 置 0（否则英雄指向已删除的卡组） |
-| `arena_state.deck_id` | 置 0（否则 FRA 当前这局指向不存在的卡组） |
-| `tournament_signups.deck_id` | 置 0；该表按 `player_uid` 记录玩家，而 deck id 全局唯一，故只按 deck id 匹配 |
-
-响应为 `RemoveDeckResponse{Error, ErrorMessage, DeckID, succeded}`，客户端以 `IsOk`
-决定是否本地移除，因此**失败时必须回报错误**而不是静默。
-
-> 顺带修掉同类的一处必然崩溃：`AddNewDeck` 的未认证错误路径把枚举写成了
-> `("Error", "enum", 类型名, 值)` 四元组，而编码器 `encode_field` 按三元组解包，
-> 一旦走到就会 `ValueError`。已改为项目统一的
-> `("Error", "enum1", (类型名, 整数值))`。
-
-回归测试在 [`tests/test_remove_deck.py`](tests/test_remove_deck.py)：它把真库经 SQLite
-backup API 复制到临时文件（含 WAL），再用桩 handler 直接驱动真实分支，验证
-「删掉了 / 悬空引用被清干净 / 删不存在的卡组也照样回包 / 别人的卡组动不了」。
-
-> 该文件刻意放在**父仓库** `tests/` 而不是 `hex-server/tests/`：CI 按固定 commit
-> 检出子模块，子模块内的新文件在 CI 里根本不存在，测试就守不住这个修复。
-> 无 `hex-server/hconnect.db` 时整类跳过，不影响未建库的 clone。
-
-## 📁 项目结构
-
-    HEX-Private-Server/
-    ├── hex-server/                 # 唯一权威服务器 / RulesPort / 游戏状态
-    │   ├── deck_inbox.py           # 外部导入请求的消费端（见 docs/DECK-IMPORT.md）
-    │   └── deck-inbox/             # 剪贴板助手投递的 JSON 请求（运行时生成）
-    ├── upstream/
-    │   ├── Dingler-FrostRingArena/ # Dingler 参考实现
-    │   ├── INTEGRATION_STATUS.md
-    │   └── UPSTREAM.lock
-    ├── integration/
-    │   ├── deck_import/            # 卡组导入：v1 codec / 文本状态机 / 装配器
-    │   └── ai_bridge/              # 原版 AI JSONL 桥接
-    ├── overlay/hex-server/         # 整文件覆盖进 hex-server/ 的源码（源头）
-    │   ├── hconnect_server.py      #   含 deck-inbox tick / 魔石 64 位解析 / RemoveDeck
-    │   ├── deck_inbox.py           #   卡组导入的跨进程通道
-    │   └── AssetExtraction/        #   populate_fra_encounters.py 的 Records 头部修复
-    ├── legacy-ai-worker/           # 原版 Game.Shared.AI Headless Worker
-    ├── client-runtime/             # HEX 客户端 managed DLL
-    ├── tests/                      # 集成与回归测试
-    ├── scripts/                    # 安装 / 同步 / Records / 启动 / 助手 / 验证
-    ├── docs/                       # 技术细节记录
-    │   ├── WINDOWS-SETUP.md        # Windows 原生环境搭建与排障
-    │   ├── DECK-IMPORT.md          # 卡组导入子系统（协议/通道/踩坑）
-    │   └── GEM-ENCODING.md         # 魔石 EGemTypesNew 编码格式
-    ├── build/                      # 除 codex-data 外均为运行时产物（已 gitignore）
-    │   ├── codex-data/             # ids.json(3124) + gems.json(73) —— 已随仓库提交
-    │   └── deck-watch.log / .lock  # 剪贴板助手日志与单实例锁（忽略）
-    ├── local-env.sh                # 本机路径（未跟踪）
-    ├── start.bat / start.sh        # 安装 + 自检 + 构建
-    ├── start-game.bat / .sh        # 服务器 + 助手 + 游戏
-    └── stop-game.bat / .sh         # 停服务（--all 连游戏一起关）
-
-### `integration/` 与 `overlay/` 是源头，不要改副本
-
-| 路径 | 角色 |
-|---|---|
-| `integration/` | **源头** |
-| `hex-server/integration/` | `apply_integration.sh` 生成的**副本**，改了会被覆盖 |
-| `overlay/hex-server/*.py` | **源头**，由 `apply_integration.sh` 拷进 `hex-server/`（9 个文件，其中 1 个保留 `AssetExtraction/` 子目录） |
-
-改完源头记得跑一次 `bash scripts/apply_integration.sh`。
-
-### ⚠️ `hconnect_server.py` 是整文件覆盖，上游更新需手工合并
-
-`overlay/hex-server/` 里的文件都是**整文件覆盖**，其中
-`hconnect_server.py` 是上游最大的源文件（约 1.1 MB），携带本项目四处关键补丁：
-
-| 补丁 | 作用 |
-|---|---|
-| `_process_deck_inbox()` + 主循环空闲 tick | 消费剪贴板助手投递的卡组导入请求 |
-| ActiveGems 64 位解析（去掉 `& 0xFFFFFFFF`） | 保住 `EGemTypesNew` 的 bit 62 格式位与第 4/5/6 槽 |
-| `GetDeckInfo` 魔石整值透传 | 收藏界面正确显示多槽位魔石 |
-| `RemoveDeck` (dt=2093) 分支 | 删除套牌并清理 `champions`/`arena_state`/`tournament_signups` 的悬空引用 |
-
-**代价**：上游改动 `hconnect_server.py` 时，`git submodule update` 拉下来的新版本
-会被 overlay 覆盖。合并上游更新的流程是
-
-```bash
-git -C hex-server fetch && git -C hex-server diff HEAD..origin/main -- hconnect_server.py
-# 手工把上游改动并入 overlay/hex-server/hconnect_server.py，再：
-bash scripts/apply_integration.sh
-```
-
-（`deck_inbox.py` 是本项目新增文件，不存在上游冲突问题。）
-
-## 🔗 固定上游版本
-
-| 组件 | Repository | 固定版本 |
-|---|---|---|
-| 权威服务器 | IanUtley/hex-server | main @ c65f2cf7e78797fb6d9da9a3401345da7cead71d |
-| Arena / 原版 AI 参考 | RomoSJR/Dingler-FrostRingArena | arena @ 8c06748080ab3fd15d67a6b2f7193615ffd2db02 |
-
-## 功能概览
-
-### Deck Import
-
-三种触发方式共用同一个导入器，行为完全一致：
-
-| 触发 | 入口 |
-|---|---|
-| 收藏界面按 **Ctrl+V** | `scripts/deck_clipboard_watch.py` → `hex-server/deck-inbox/` → 服务器消费 |
-| 聊天 `/importdeck` | `overlay/hex-server/commands.py` |
-| 聊天 `/importdecktext` | 同上（纯文本，不需要数据文件） |
-
-支持 Dingler 兼容的 Hex Codex v1，包括 deck code 解码、CRC 校验、主牌组 / Reserve、命名 section 和明确的验证错误。
-
-Import 使用玩家现有 card_instances，不会因为导入 deck 而无条件伪造卡牌；缺卡按 `min(需求, 已有)` 取用并把缺口报告出来。
-
-### 免重登刷新
-
-外部助手**不直接写数据库** —— 那会让运行中的客户端一直显示旧的卡组列表，直到重新登录。
-助手改为投递请求，由服务器进程消费并调用 `push_profile_stream()`，
-收藏界面**当场**刷新。详见 [`docs/DECK-IMPORT.md`](docs/DECK-IMPORT.md)。
-
-### 魔石（Gems）
-
-客户端 `EGemTypesNew` 是**按槽位打包的 ulong 位域**：bit 62 是格式标志，
-每槽 10 bit。卡组的「列表路径」（`EncodedDecks`）和「字典路径」
-（`GetDeckInfo` / `UpdateDeck`）序列化形状**不同**，混淆两者会让魔石全部消失。
-
-格式的权威定义、三处修复与验证方式见 [`docs/GEM-ENCODING.md`](docs/GEM-ENCODING.md)。
-
-### Reserve
-
-Reserve 独立保存在 decks.reserves，并在客户端 profile 编码时保留真实 Reserve 标记。
-
-### 原版 AI
-
-原版 AI 的数据流：
-
-    Game.Shared.AI
-        ↓
-    decision intent
-        ↓
-    RulesTransaction
-        ↓
-    hex-server RulesPort
-        ↓
-    authoritative state
-
-Worker 只产生意图，最终规则验证仍由 hex-server 完成。
-
-### AI 安全机制
-
-- 15 秒 AI stall timeout
-- 最多 3 次 resync
-- 重复 transaction 抑制
-- 每个 phase key 最多 5000 次动作的 livelock 检测
-- 原版 AI 故障时回退到 Python AI
-
-### Arena 兼容
-
-Dingler 的 Arena 源码只用于 live event routing、AI session hosting、resync / livelock protection、Deck Import 和 Frost Ring Arena 行为参考。
-
-不会把 Dingler 的 server engine 当成第二个权威规则引擎。
-
-## GitHub Actions
-
-CI 会自动检查：
-
-- 固定 upstream commit
-- integration tests 和 Python syntax
-- Records 完整性以及可用时的 server startup / regression
-- Windows 下 Original AI Worker 构建
-- 7 个客户端 DLL
-- Original AI runtime load 和 AI session probe
-- Dingler reference build
-
-因此本地不需要一开始就把所有运行环境全部配齐。
-
-## 当前架构
-
-    HEX Private Server
-           │
-           ▼
-    hex-server RulesPort
-           │
-      ┌────┴────┐
-      │         │
-     玩家      AI
-               │
-        Original AI Worker
-               │
-          typed intent
-               │
-               ▼
-        RulesPort validation
-               │
-               ▼
-       authoritative state
-
-## Client DLLs
-
-client-runtime/ 当前包含：
-
-- Assembly-CSharp-firstpass.dll
-- ICSharpCode.SharpZipLib.dll
-- NCalc.dll
-- SampleClassLibrary.dll
-- System.EnterpriseServices.dll
-- System.Web.Services.dll
-- UnityEngine.dll
-
-这些 DLL 是客户端运行时输入。是否允许重新分发，应以适用的 HEX / Unity / 客户端授权条款为准；项目本身的 AGPL 许可不会自动授予第三方客户端二进制的再分发权。
-
-## 一句话
-
-先执行下面 4 行即可完成基础安装和自检：
-
-    git clone --recurse-submodules https://github.com/Mark007007/HEX-Private-Server.git
-    cd HEX-Private-Server
-    bash scripts/pull_upstreams.sh && bash scripts/apply_integration.sh
-    python -m unittest discover -s tests -v
-
-测试通过后再执行：
-
-    dotnet build legacy-ai-worker/LegacyAiWorker.csproj -c Release --nologo
-
-只有要跑真实 HEX 对局时，才继续做 Data/gamedata → Records → hex-server 启动。
-
-之后日常就一条：
-
-    start-game.bat          # 服务器 + 剪贴板助手 + 游戏；停用 stop-game.bat
+~~~text
+Assembly-CSharp.dll
+Assembly-CSharp-firstpass.dll
+~~~
+
+输出：
+
+~~~text
+artifacts/re/
+├── types.json
+├── fields.json
+├── methods.json
+├── services.json
+├── request-response.json
+├── events.json
+├── transactions.json
+├── dependencies.json
+└── callgraph.json
+~~~
 
 ---
 
-## ⚠️ 已知未自动化验证的部分
+# 45. 请求 / 响应自动生成
 
-- **Original AI 全链路**：Worker 是惰性启动的，只在第一场带 AI 的对局走到
-  `ai.py` 的 `try_native_original_ai()` 时才 spawn。需要在游戏里实操验证
-  （建议从 Practice/PvE 开始，不要一上来就跑完整 Frost Ring Arena）。
-- **`tests_combat.py` 有 3 个既有失败**（37 PASS / 3 FAIL）：
-  `GameStarted chain auto-pass`、`Speed troop attacks same turn`、
-  `Deck-search prompt target id`。原因是测试替身缺少 `user_profile` /
-  `client_reck_id` 属性，属测试脚手架问题，与卡组/魔石无关。
+例如检测到：
+
+~~~text
+JoinSessionRequestArgs
+JoinSessionResponseArgs
+~~~
+
+就生成：
+
+~~~text
+HexServer.Contracts
+    ├── JoinSessionRequest.cs
+    └── JoinSessionResponse.cs
+~~~
+
+Service：
+
+~~~text
+GameSession
+ID = 246
+~~~
+
+Method：
+
+~~~text
+JoinSession
+ID = 3015
+~~~
+
+形成：
+
+~~~text
+Service 246
+Method 3015
+Request JoinSessionRequestArgs
+Response JoinSessionResponseArgs
+~~~
+
+---
+
+# 46. 不允许猜协议
+
+禁止：
+
+~~~text
+❌ 假设 Magic = 0x4858
+❌ 假设 6-byte header
+❌ 假设 packet cmd 是 ushort
+❌ 假设 body = JSON
+❌ 假设 RabbitMQ 是玩家协议
+❌ 假设一定是 AES
+❌ 假设一定是 RSA
+❌ 假设一定是 SmartFox
+~~~
+
+除非：
+
+~~~text
+IL
++
+metadata
++
+动态行为
+~~~
+
+有足够证据支持。
+
+---
+
+# 47. 加密 / 认证当前状态
+
+目前确认：
+
+~~~text
+Auth
+Authenticator
+AuthenticationSDK
+HexAuthPS4
+auth:req
+~~~
+
+以及：
+
+~~~text
+action
+user
+pass
+token
+region
+lang
+mac
+platform
+~~~
+
+但目前静态证据不足以证明：
+
+~~~text
+HCP body = AES / RSA / DH ...
+~~~
+
+因此：
+
+~~~text
+IHandshake
+IAuthenticator
+IEncryptor
+~~~
+
+全部保留接口。
+
+但不先制造假的加密协议。
+
+---
+
+# 48. Card Data 的边界
+
+Managed.zip 中已经有：
+
+~~~text
+Card
+CardData
+CardTemplate
+~~~
+
+等运行时类型。
+
+但是不能因此声称：
+
+> 所有完整卡牌数据都已经包含在 DLL。
+
+真正的卡牌定义可能来自：
+
+~~~text
+Data/gamedata
+Resources
+AssetBundle
+Records
+外部配置
+~~~
+
+所以：
+
+~~~text
+代码 = DLL
+数据 = GameData / Records / Assets
+~~~
+
+必须分开调查。
+
+---
+
+# 49. 第一阶段明确不实现
+
+~~~text
+❌ Dingler 作为权威规则引擎
+❌ Frost Ring Arena
+❌ Python AI 作为核心
+❌ RabbitMQ 强制依赖
+❌ 多进程微服务
+❌ 商城
+❌ 拍卖
+❌ 邮件
+❌ Tournament
+❌ 全部 PvE
+❌ 全部卡牌 UI
+❌ 重写所有 Mechanics
+❌ 猜加密
+❌ 猜包头
+~~~
+
+---
+
+# 50. 真正开发路线
+
+## P0 — 逆向资料库
+
+~~~text
+Managed.zip
+ ↓
+HexExtractor
+ ↓
+Type / Field / Method / Service / Dependency Catalog
+~~~
+
+## P1 — HConnect
+
+实现：
+
+~~~text
+~HCP~
+uint32 BE
+headerSize
+JSON header
+bodySize
+body
+~~~
+
+以及：
+
+~~~text
+partial frame
+multiple frames
+sequence
+resend
+heartbeat
+~~~
+
+## P2 — DataWrapper / EncData / ObjFmt
+
+实现：
+
+~~~text
+DataWrapper
+ ↓
+EncData
+ ↓
+ObjFmt
+~~~
+
+并用原客户端产生的结果做：
+
+~~~text
+byte-for-byte
+~~~
+
+对照。
+
+## P3 — Service Router
+
+实现：
+
+~~~text
+Service UID
+Method ID
+Request
+Response
+~~~
+
+首批只做：
+
+~~~text
+GameSession
+Profile
+~~~
+
+## P4 — Session
+
+实现：
+
+~~~text
+newsession
+create
+sid
+StartSession
+FindSession
+JoinSession
+ReadyForGameSetup
+ReadyForGameEvents
+ReadyToStartGame
+~~~
+
+## P5 — 原版规则核心
+
+优先接入：
+
+~~~text
+Game.Shared.Mechanics
+Game.Shared.Session
+AuthoritativeSessionBase
+Transactions
+SessionEvents
+~~~
+
+只剥离：
+
+~~~text
+Game.Client.*
+Unity.*
+~~~
+
+依赖。
+
+## P6 — 两客户端对战
+
+目标：
+
+~~~text
+Client A
+    ↕
+.NET Server
+    ↕
+Client B
+~~~
+
+实现：
+
+~~~text
+Game Start
+Mulligan
+Draw
+Resource
+Play Card
+Attack
+Block
+Damage
+Priority
+Turn End
+Game Over
+~~~
+
+## P7 — Replay / Oracle
+
+加入：
+
+~~~text
+seed
+transaction log
+event log
+state checksum
+differential comparison
+~~~
+
+## P8 — 完整 Profile / Card Data
+
+继续：
+
+~~~text
+cards
+decks
+champions
+inventory
+records
+~~~
+
+---
+
+# 51. 最终产品形态
+
+Windows 目标：
+
+~~~text
+HEX-Private-Server/
+├── HexServer.exe
+├── appsettings.json
+├── data/
+└── logs/
+~~~
+
+双击：
+
+~~~text
+start.bat
+~~~
+
+即可。
+
+默认开发模式：
+
+~~~text
+SQLite
++
+InMemory MessageBus
++
+HConnect localhost
+~~~
+
+RabbitMQ：
+
+~~~text
+optional
+~~~
+
+---
+
+# 52. 当前逆向结论总表
+
+| 项目 | 当前状态 |
+|---|---|
+| HCP magic | **CONFIRMED** — ~HCP~ |
+| Frame length | **CONFIRMED** — uint32 |
+| Endianness | **CONFIRMED** — Big Endian |
+| Header layout | **CONFIRMED** |
+| Header format | **CONFIRMED** — UTF-8 JSON |
+| Body | **CONFIRMED** — byte[] |
+| Session ccnt/scnt | **CONFIRMED** |
+| Resend | **CONFIRMED** |
+| Session create | **CONFIRMED** |
+| Default local port | **HIGH CONFIDENCE** — 9933 |
+| DataWrapper | **CONFIRMED** |
+| EncData custom path | **CONFIRMED** |
+| ObjFmt separator | **CONFIRMED** — ; |
+| Number encoding | **CONFIRMED** |
+| Type table | **CONFIRMED** |
+| Size table | **CONFIRMED** |
+| Recursive object layout | **RECONSTRUCTED** |
+| Compression 0/1 meaning | **UNVERIFIED** |
+| Service IDs | **CONFIRMED / HIGH CONFIDENCE** |
+| GameSession method IDs | **CONFIRMED** |
+| Mechanics Unity dependency | **未发现直接 Unity 调用** |
+| Session Unity dependency | **未发现直接 Unity 调用** |
+| AuthoritativeSessionBase Unity dependency | **未发现直接 Unity 调用** |
+| AuthoritativeSessionBase Client dependency | **少量，已定位** |
+| RabbitMQ = player transport | **NOT PROVEN** |
+| AES/RSA game packet encryption | **NOT PROVEN** |
+| SmartFox/SFS = exact third-party protocol | **NOT PROVEN** |
+
+---
+
+# 53. 最重要的工程结论
+
+本项目真正应该做的是：
+
+~~~text
+          ORIGINAL HEX
+               │
+       ┌───────┴────────┐
+       │                │
+   Protocol         Shared Rules
+       │                │
+       ▼                ▼
+    HConnect       Mechanics
+    ObjFmt         Session
+    EncData        Transactions
+    DataWrapper    Events
+       │                │
+       └───────┬────────┘
+               ▼
+        Compatibility Layer
+               │
+               ▼
+          .NET 10 Server
+~~~
+
+也就是：
+
+## **不是仿造 HEX。**
+
+而是：
+
+## **把原 HEX 中已经存在的协议与游戏核心，恢复成一个现代、无 Unity、可独立运行的服务器。**
+
+---
+
+# 54. 下一阶段
+
+优先顺序：
+
+~~~text
+1. 完成 HexExtractor
+2. 完成 EncData / ObjFmt 的 byte-for-byte encoder
+3. 完成 Request / Response 自动 catalog
+4. 完成 HConnect reliable channel
+5. 把 AuthoritativeSessionBase 的外部依赖替换为 Server Adapter
+6. 建立 Legacy Oracle
+7. 打通两客户端本地对战
+~~~
+
+只有这条链打通之后，才开始扩充：
+
+~~~text
+Profile
+Deck
+Card Data
+AI
+Arena
+RabbitMQ
+~~~
+
+---
+
+# 55. 反编译结果的使用原则
+
+本项目的反编译工作不是为了“复制整个客户端”，而是为了恢复最小必要的：
+
+~~~text
+Protocol contract
+Serialization contract
+Game rule contract
+Session contract
+Transaction contract
+Event contract
+~~~
+
+最终的服务器实现应该满足：
+
+~~~text
+客户端看到的协议
+        ==
+服务器发送的协议
+
+原版规则输入
+        ==
+新服务器验证后的规则输入
+
+原版状态演化
+        ==
+新服务器状态演化
+~~~
+
+达到这一条件后，才可以逐步移除 Legacy Compatibility。
+
+---
+
+# Reverse Engineering Source
+
+本 README 的调查基础：
+
+~~~text
+Managed.zip
+├── Assembly-CSharp.dll
+└── Assembly-CSharp-firstpass.dll
+~~~
+
+重点类型：
+
+~~~text
+Game.Shared.Network.HConnect.Proto
+Game.Shared.Network.HConnect.Message
+Game.Shared.Network.HConnect.Session
+Game.Shared.Network.DataWrapper
+Game.Shared.Network.EncData
+Game.Shared.Network.ObjFmt
+Game.Shared.Network.Encoder
+Game.Shared.Network.Decoder
+
+Game.Shared.Mechanics
+Game.Shared.Session
+Game.Shared.AuthoritativeSessionBase
+Game.Shared.Mechanics.Transactions
+SessionEventArgs
+~~~
+
+> 本文中的“CONFIRMED”来自静态 DLL 元数据 / IL 分析；尚未动态连接原版客户端的部分，会继续通过 HexProbe 与 byte-for-byte capture 验证。
