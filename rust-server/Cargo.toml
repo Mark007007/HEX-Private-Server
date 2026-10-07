@@ -1,0 +1,7 @@
+[package]
+name = "hex-server"
+version = "0.1.0"
+edition = "2021"
+description = "Clean-room Rust server core for the HEX client protocol"
+
+[dependencies]
